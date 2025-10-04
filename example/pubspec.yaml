@@ -1,0 +1,24 @@
+name: dartus_demo
+description: Flutter demo app showcasing Dartus parity with the Walrus Swift sample.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.9.0 <4.0.0'
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # TODO: replace with published version when available
+  dartus:
+    path: ../
+  image_picker: ^1.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
