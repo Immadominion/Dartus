@@ -1,0 +1,58 @@
+# Dart/Flutter build outputs
+.dart_tool/
+build/
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ/Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+.idea_modules/
+
+# VS Code
+.vscode/
+
+# Flutter/Dart pub
+.packages
+.pub-cache/
+.pub/
+pubspec.lock
+
+# Generated files
+*.dart.js
+*.dart.js.map
+*.dart.js.deps
+*.info.json
+*.part
+
+# Coverage
+coverage/
+
+# Documentation (generated)
+doc/api/
+
+# Test artifacts
+.test_coverage.dart
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Environment
+.env
+.env.local
