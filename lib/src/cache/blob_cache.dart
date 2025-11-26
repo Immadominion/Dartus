@@ -4,12 +4,49 @@ import 'dart:typed_data';
 
 import '../utils/hash.dart';
 
-/// Stores blobs on disk using SHA-256 filenames, mirroring the Swift cache.
+/// Disk-based LRU cache for blob storage with SHA-256 filenames.
+///
+/// Stores blobs as individual files in a directory, using SHA-256 hashes
+/// of blob IDs as filenames. Evicts the least recently accessed entry when
+/// [maxSize] is exceeded.
+///
+/// ## Example
+///
+/// ```dart
+/// final cache = BlobCache(
+///   cacheDirectory: Directory('/path/to/cache'),
+///   maxSize: 100,
+/// );
+///
+/// // Store blob
+/// await cache.put('blob-id-123', blobData);
+///
+/// // Retrieve blob
+/// final data = await cache.get('blob-id-123');
+///
+/// // Clean up
+/// await cache.dispose();
+/// ```
+///
+/// When no [cacheDirectory] is provided, a temporary directory is created
+/// and automatically cleaned up on [dispose].
 class BlobCache {
   /// Creates a cache rooted at [cacheDirectory] or a temporary directory.
+  ///
+  /// The [maxSize] parameter sets the maximum number of blobs to store.
+  /// When exceeded, the least recently accessed blob is evicted.
+  ///
+  /// Throws [ArgumentError] if [maxSize] is less than or equal to zero.
   BlobCache({Directory? cacheDirectory, this.maxSize = 100})
     : _fileManager = cacheDirectory ?? _createTemporaryCacheDir(),
       _cleanupOnDispose = cacheDirectory == null {
+    if (maxSize <= 0) {
+      throw ArgumentError.value(
+        maxSize,
+        'maxSize',
+        'must be greater than zero',
+      );
+    }
     if (!_fileManager.existsSync()) {
       _fileManager.createSync(recursive: true);
     }

@@ -89,7 +89,7 @@
     },
     {
       "name": "meta",
-      "version": "1.16.0",
+      "version": "1.17.0",
       "dependencies": []
     },
     {
@@ -151,7 +151,7 @@
     },
     {
       "name": "test_api",
-      "version": "0.7.6",
+      "version": "0.7.7",
       "dependencies": [
         "async",
         "boolean_selector",
@@ -234,7 +234,7 @@
     },
     {
       "name": "crypto",
-      "version": "3.0.6",
+      "version": "3.0.7",
       "dependencies": [
         "typed_data"
       ]

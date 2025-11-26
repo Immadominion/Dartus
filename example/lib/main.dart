@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:dartus/walrus_client.dart';
+import 'package:dartus/dartus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -80,7 +80,7 @@ class WalrusManager {
         timeout: const Duration(seconds: 30),
         cacheMaxSize: 100,
         useSecureConnection: false, // testnet certs are currently untrusted
-        // logLevel: WalrusLogLevel.basic, 
+        // logLevel: WalrusLogLevel.basic,
       );
 
   final WalrusClient client;

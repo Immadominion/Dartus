@@ -134,17 +134,48 @@ class WalrusClient {
     await cache.dispose();
   }
 
-  /// Sets the default JWT used for subsequent requests.
+  /// Sets the default JWT token for authenticated requests.
+  ///
+  /// The [token] will be sent as `Authorization: Bearer {token}` on all
+  /// subsequent requests unless overridden by a method-level `jwtToken` parameter.
+  ///
+  /// ```dart
+  /// client.setJwtToken('your-jwt-token');
+  /// await client.putBlob(data: bytes); // uses token
+  /// await client.putBlob(data: bytes, jwtToken: 'other'); // override
+  /// ```
   void setJwtToken(String token) {
     _jwtToken = token;
   }
 
-  /// Removes any stored JWT so requests become anonymous.
+  /// Clears the instance-level JWT token.
+  ///
+  /// Subsequent requests will be unauthenticated unless a method-level
+  /// `jwtToken` parameter is provided.
   void clearJwtToken() {
     _jwtToken = null;
   }
 
-  /// Uploads in-memory [data] to `v1/blobs` and returns the Walrus response.
+  /// Uploads in-memory [data] to the Walrus publisher.
+  ///
+  /// Returns a JSON response containing the blob ID and metadata.
+  ///
+  /// Optional parameters:
+  /// * [epochs]: Storage duration in epochs
+  /// * [deletable]: Whether the blob can be deleted later
+  /// * [sendObjectTo]: SUI address to send the blob object
+  /// * [jwtToken]: Per-call JWT override (overrides instance token)
+  ///
+  /// Throws [WalrusApiError] on network or server errors.
+  ///
+  /// ```dart
+  /// final response = await client.putBlob(
+  ///   data: imageBytes,
+  ///   epochs: 10,
+  ///   deletable: true,
+  /// );
+  /// final blobId = response['newlyCreated']['blobObject']['blobId'];
+  /// ```
   Future<Map<String, dynamic>> putBlob({
     required Uint8List data,
     String? encodingType,

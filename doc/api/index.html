@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, user-scalable=no">
+  <meta name="description" content="dartus API docs, for the Dart programming language.">
+  <title>dartus - Dart API docs</title>
+
+
+  
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
+  
+  <link rel="stylesheet" href="static-assets/github.css?v1">
+  <link rel="stylesheet" href="static-assets/styles.css?v1">
+  <link rel="icon" href="static-assets/favicon.png?v1">
+  
+</head>
+
+<body data-base-href="" data-using-base-href="false" class="light-theme">
+<div id="overlay-under-drawer"></div>
+<header id="title">
+  <span id="sidenav-left-toggle" class="material-symbols-outlined" role="button" tabindex="0">menu</span>
+  <ol class="breadcrumbs gt-separated dark hidden-xs">
+    <li><a href="https://github.com/Immadominion/Dartus">dartus package</a></li>
+  </ol>
+  <div class="self-name">dartus</div>
+  <form class="search navbar-right" role="search">
+    <input type="text" id="search-box" autocomplete="off" disabled class="form-control typeahead" placeholder="Loading search...">
+  </form>
+  <button class="toggle" id="theme-button" title="Toggle between light and dark mode" aria-label="Light and dark mode toggle">
+    <span id="dark-theme-button" class="material-symbols-outlined" aria-hidden="true">
+      dark_mode
+    </span>
+    <span id="light-theme-button" class="material-symbols-outlined" aria-hidden="true">
+      light_mode
+    </span>
+  </button>
+</header>
+<main>
+  <div id="dartdoc-main-content" class="main-content">
+      
+<section class="desc markdown">
+  <h1 id="dartus">Dartus</h1>
+<p><img src="./banner.png" alt="Walrus SDK banner"></p>
+<p><strong>Dartus</strong> is a Dart SDK for <a href="https://walrus.site">Walrus</a> decentralized blob storage.</p>
+<h2 id="features">Features</h2>
+<ul>
+<li><strong>Upload</strong>: <code>putBlob</code>, <code>putBlobFromFile</code>, <code>putBlobStreaming</code> with optional epochs, deletable flag, and SUI object routing</li>
+<li><strong>Download</strong>: <code>getBlob</code>, <code>getBlobByObjectId</code>, <code>getBlobAsFile</code>, <code>getBlobAsFileStreaming</code> with automatic caching</li>
+<li><strong>Metadata</strong>: <code>getBlobMetadata</code> for HEAD requests returning response headers</li>
+<li><strong>Caching</strong>: Disk-based LRU cache with SHA-256 filenames, configurable size limits</li>
+<li><strong>Auth</strong>: JWT support via instance-level or per-call tokens</li>
+<li><strong>TLS</strong>: Configurable validation (insecure mode for testnet, secure for mainnet)</li>
+<li><strong>Logging</strong>: Built-in console logging with <code>none</code>, <code>basic</code>, and <code>verbose</code> levels</li>
+</ul>
+<h2 id="installation">Installation</h2>
+<h3 id="from-pubdev">From pub.dev</h3>
+<pre class="language-yaml"><code class="language-yaml">dependencies:
+  dartus: ^0.1.0
+</code></pre>
+<h3 id="from-source">From source</h3>
+<pre class="language-yaml"><code class="language-yaml">dependencies:
+  dartus:
+    git:
+      url: https://github.com/Immadominion/Dartus.git
+</code></pre>
+<p>Then run:</p>
+<pre class="language-bash"><code class="language-bash">dart pub get  # or flutter pub get
+</code></pre>
+<h2 id="quick-start">Quick Start</h2>
+<pre class="language-dart"><code class="language-dart">import 'package:dartus/dartus.dart';
+import 'dart:io';
+
+void main() async {
+  final client = WalrusClient(
+    publisherBaseUrl: Uri.parse('https://walrus-testnet-publisher.starduststaking.com'),
+    aggregatorBaseUrl: Uri.parse('https://agg.test.walrus.eosusa.io'),
+    useSecureConnection: false, // testnet certificates may be expired
+  );
+
+  // Upload blob
+  final imageBytes = await File('image.png').readAsBytes();
+  final response = await client.putBlob(data: imageBytes);
+  print('Uploaded: $response');
+
+  // Extract blob ID from response
+  final blobId = response['newlyCreated']?['blobObject']?['blobId'] 
+      ?? response['alreadyCertified']?['blobId'];
+
+  // Download blob (cached automatically)
+  final downloaded = await client.getBlob(blobId);
+  print('Downloaded ${downloaded.length} bytes');
+
+  await client.close();
+}
+</code></pre>
+<h2 id="documentation">Documentation</h2>
+<p>Generate API documentation locally:</p>
+<pre class="language-bash"><code class="language-bash">dart doc
+dart pub global activate dhttpd
+dart pub global run dhttpd --path doc/api
+</code></pre>
+<p>Then open <code>http://localhost:8080</code> in your browser.</p>
+<p>Published packages have API docs automatically generated at <code>pub.dev/documentation/dartus/latest</code>.</p>
+<h2 id="api-reference">API Reference</h2>
+<h3 id="walrusclient">WalrusClient</h3>
+<pre class="language-dart"><code class="language-dart">WalrusClient({
+  required Uri publisherBaseUrl,
+  required Uri aggregatorBaseUrl,
+  Duration timeout = const Duration(seconds: 30),
+  Directory? cacheDirectory,
+  int cacheMaxSize = 100,
+  bool useSecureConnection = false,
+  String? jwtToken,
+  HttpClient? httpClient,
+  WalrusLogLevel logLevel = WalrusLogLevel.basic,
+})
+</code></pre>
+<p><strong>Upload Methods</strong></p>
+<ul>
+<li><code>putBlob({required Uint8List data, ...})</code> - Upload in-memory bytes</li>
+<li><code>putBlobFromFile({required File file, ...})</code> - Upload from file path</li>
+<li><code>putBlobStreaming({required File file, ...})</code> - Stream large file uploads</li>
+</ul>
+<p><strong>Download Methods</strong></p>
+<ul>
+<li><code>getBlob(String blobId)</code> - Download with caching</li>
+<li><code>getBlobByObjectId(String objectId)</code> - Download without caching</li>
+<li><code>getBlobAsFile({required String blobId, required File destination})</code> - Save to file</li>
+<li><code>getBlobAsFileStreaming({...})</code> - Stream download with progress</li>
+<li><code>getBlobMetadata(String blobId)</code> - Fetch headers via HEAD request</li>
+</ul>
+<p><strong>Auth Methods</strong></p>
+<ul>
+<li><code>setJwtToken(String token)</code> - Set instance-level JWT</li>
+<li><code>clearJwtToken()</code> - Remove instance-level JWT</li>
+</ul>
+<p><strong>Logging Methods</strong></p>
+<ul>
+<li><code>setLogLevel(WalrusLogLevel level)</code> - Control console output</li>
+<li><code>logInfo(String message)</code>, <code>logVerbose(...)</code>, <code>logWarning(...)</code>, <code>logError(...)</code></li>
+</ul>
+<h2 id="tls-configuration">TLS Configuration</h2>
+<p><strong>Testnet</strong> (expired/self-signed certificates):</p>
+<pre class="language-dart"><code class="language-dart">final client = WalrusClient(
+  publisherBaseUrl: Uri.parse('https://publisher.testnet.walrus.com'),
+  aggregatorBaseUrl: Uri.parse('https://agg.test.walrus.eosusa.io'),
+  useSecureConnection: false, // default
+);
+</code></pre>
+<p><strong>Mainnet</strong> (valid certificates):</p>
+<pre class="language-dart"><code class="language-dart">final client = WalrusClient(
+  publisherBaseUrl: Uri.parse('https://publisher.walrus.com'),
+  aggregatorBaseUrl: Uri.parse('https://aggregator.walrus.com'),
+  useSecureConnection: true,
+);
+</code></pre>
+<h2 id="testing">Testing</h2>
+<pre class="language-bash"><code class="language-bash"># Run all tests (unit + live integration)
+dart test
+
+# Run specific test suite
+dart test test/blob_cache_test.dart
+
+# Code analysis
+dart analyze
+
+# Format code
+dart format .
+</code></pre>
+<h2 id="flutter-demo">Flutter Demo</h2>
+<p>A reference Flutter app lives in <code>example/</code>:</p>
+<pre class="language-bash"><code class="language-bash">cd example
+flutter pub get
+flutter run
+</code></pre>
+<p>Features:</p>
+<ul>
+<li>Upload images via picker</li>
+<li>Fetch blobs by ID</li>
+<li>Console logging output</li>
+</ul>
+<h2 id="requirements">Requirements</h2>
+<ul>
+<li>Dart SDK ≥ 3.9.2 or Flutter SDK ≥ 3.35.0</li>
+<li>Publisher and aggregator endpoints for your Walrus deployment</li>
+<li>iOS: ATS exceptions for insecure HTTP (testnet only)</li>
+</ul>
+<h2 id="license">License</h2>
+<p>MIT License - see <a href="LICENSE">LICENSE</a> for details.</p>
+<h2 id="links">Links</h2>
+<ul>
+<li><a href="https://docs.walrus.site">Walrus Documentation</a></li>
+<li><a href="https://github.com/Immadominion/Dartus/issues">Issue Tracker</a></li>
+<li><a href="CHANGELOG.md">Changelog</a></li>
+</ul>
+</section>
+
+
+      <section class="summary">
+          <h2>Libraries</h2>
+        <dl>
+          <dt id="dartus">
+  <span class="name"><a href="dartus/">dartus</a></span> 
+
+</dt>
+<dd>Dart SDK for Walrus decentralized blob storage.
+</dd>
+
+        </dl>
+      </section>
+  </div> <!-- /.main-content -->
+  <div id="dartdoc-sidebar-left" class="sidebar sidebar-offcanvas-left">
+    <!-- The search input and breadcrumbs below are only responsively visible at low resolutions. -->
+<header id="header-search-sidebar" class="hidden-l">
+  <form class="search-sidebar" role="search">
+    <input type="text" id="search-sidebar" autocomplete="off" disabled class="form-control typeahead" placeholder="Loading search...">
+  </form>
+</header>
+<ol class="breadcrumbs gt-separated dark hidden-l" id="sidebar-nav">
+    <li><a href="https://github.com/Immadominion/Dartus">dartus package</a></li>
+</ol>
+
+    <h5 class="hidden-xs"><span class="package-name">dartus</span> <span class="package-kind">package</span></h5>
+    <ol>
+      <li class="section-title">Libraries</li>
+      <li><a href="dartus/">dartus</a></li>
+</ol>
+
+  </div>
+  <div id="dartdoc-sidebar-right" class="sidebar sidebar-offcanvas-right">
+  </div>
+</main>
+<footer>
+  <span class="no-break">
+    dartus
+      0.1.0
+  </span>
+  
+</footer>
+
+
+<script src="static-assets/highlight.pack.js?v1"></script>
+<script src="static-assets/docs.dart.js"></script>
+
+</body>
+</html>
+
