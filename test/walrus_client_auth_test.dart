@@ -151,9 +151,14 @@ void main() {
       );
     });
 
-    test('omits null query parameters', () async {
+    test('defaults deletable to true when not specified', () async {
       server.handleNext((request) {
-        expect(request.uri.queryParameters, isEmpty);
+        expect(request.uri.queryParameters['deletable'], equals('true'));
+        expect(request.uri.queryParameters.containsKey('epochs'), isFalse);
+        expect(
+          request.uri.queryParameters.containsKey('send_object_to'),
+          isFalse,
+        );
         return MockResponse(200, jsonEncode({'status': 'ok'}));
       });
 

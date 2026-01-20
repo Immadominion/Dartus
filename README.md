@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Upload**: `putBlob`, `putBlobFromFile`, `putBlobStreaming` with optional epochs, deletable flag, and SUI object routing
+- **Upload**: `putBlob`, `putBlobFromFile`, `putBlobStreaming` with optional epochs, deletable flag (defaults to `true`), and SUI object routing
 - **Download**: `getBlob`, `getBlobByObjectId`, `getBlobAsFile`, `getBlobAsFileStreaming` with automatic caching
 - **Metadata**: `getBlobMetadata` for HEAD requests returning response headers
 - **Caching**: Disk-based LRU cache with SHA-256 filenames, configurable size limits

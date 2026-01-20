@@ -162,7 +162,7 @@ class WalrusClient {
   ///
   /// Optional parameters:
   /// * [epochs]: Storage duration in epochs
-  /// * [deletable]: Whether the blob can be deleted later
+  /// * [deletable]: Whether the blob can be deleted later (defaults to `true`)
   /// * [sendObjectTo]: SUI address to send the blob object
   /// * [jwtToken]: Per-call JWT override (overrides instance token)
   ///
@@ -432,9 +432,10 @@ class WalrusClient {
     if (epochs != null) {
       params['epochs'] = epochs.toString();
     }
-    if (deletable != null) {
-      params['deletable'] = deletable ? 'true' : 'false';
-    }
+    // Default to deletable=true for Walrus ecosystem compliance.
+    // Pass deletable: false explicitly to create permanent blobs.
+    final isDeletable = deletable ?? true;
+    params['deletable'] = isDeletable ? 'true' : 'false';
     if (sendObjectTo != null) {
       params['send_object_to'] = sendObjectTo;
     }

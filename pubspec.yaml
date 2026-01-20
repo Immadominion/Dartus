@@ -1,6 +1,6 @@
 name: dartus
 description: Dart SDK for Walrus decentralized blob storage with caching, streaming, and authentication.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/Immadominion/Dartus
 homepage: https://github.com/Immadominion/Dartus
 
