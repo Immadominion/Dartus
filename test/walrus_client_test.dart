@@ -1,3 +1,5 @@
+library;
+
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -30,7 +32,7 @@ void main() {
   });
 
   test(
-    'uploads a file and fetches by object id',
+    'uploads a file and fetches by blob id',
     () async {
       final response = await client.putBlobFromFile(file: TestConfig.testFile);
       expect(response, isNotEmpty);
@@ -38,9 +40,12 @@ void main() {
       final blobId = _findBlobId(response);
       expect(blobId, isNotNull, reason: 'Response should contain a blobId');
 
-      final data = await client.getBlobByObjectId(blobId!);
+      // Use getBlob (by blob ID), not getBlobByObjectId
+      final data = await client.getBlob(blobId!);
       expect(data, isA<Uint8List>());
       expect(data, isNotEmpty);
+      // Verify the content matches what we uploaded
+      expect(data, equals(TestConfig.testBlobData));
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );

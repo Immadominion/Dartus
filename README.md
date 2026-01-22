@@ -173,6 +173,7 @@ flutter run
 ```
 
 Features:
+
 - Upload images via picker
 - Fetch blobs by ID
 - Console logging output

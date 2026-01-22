@@ -1,0 +1,18 @@
+# Dartus SDK Test Configuration
+# See https://github.com/dart-lang/test/blob/master/pkgs/test/doc/configuration.md
+
+# Define tags for categorizing tests
+tags:
+  unit:
+    description: "Fast unit tests with mocked dependencies"
+  integration:
+    description: "Tests that hit live network endpoints (flaky)"
+  slow:
+    description: "Tests that may take longer to complete"
+
+# Default timeout for all tests (30 seconds)
+timeout: 30s
+
+# Platform configuration
+platforms:
+  - vm

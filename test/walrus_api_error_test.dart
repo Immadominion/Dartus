@@ -1,3 +1,5 @@
+library;
+
 import 'package:dartus/src/models/walrus_api_error.dart';
 import 'package:test/test.dart';
 

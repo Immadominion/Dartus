@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-01-20
 
 ### Added
+
 - Initial release with full Walrus API parity
 - Upload methods: `putBlob`, `putBlobFromFile`, `putBlobStreaming` (default `deletable=true`)
 - Download methods: `getBlob`, `getBlobByObjectId`, `getBlobAsFile`, `getBlobAsFileStreaming`
@@ -20,4 +21,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Live integration tests against Walrus testnet endpoints
 
 ### Notes
+
 - Blobs are created as deletable by default; pass `deletable: false` to create permanent blobs
