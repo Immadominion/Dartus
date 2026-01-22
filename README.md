@@ -46,9 +46,9 @@ import 'dart:io';
 
 void main() async {
   final client = WalrusClient(
-    publisherBaseUrl: Uri.parse('https://walrus-testnet-publisher.starduststaking.com'),
-    aggregatorBaseUrl: Uri.parse('https://agg.test.walrus.eosusa.io'),
-    useSecureConnection: false, // testnet certificates may be expired
+    publisherBaseUrl: Uri.parse('https://publisher.walrus-testnet.walrus.space'),
+    aggregatorBaseUrl: Uri.parse('https://aggregator.walrus-testnet.walrus.space'),
+    useSecureConnection: true, // use TLS for production
   );
 
   // Upload blob
