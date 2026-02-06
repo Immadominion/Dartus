@@ -184,6 +184,26 @@ Features:
 - Publisher and aggregator endpoints for your Walrus deployment
 - iOS: ATS exceptions for insecure HTTP (testnet only)
 
+## Storage Costs (SUI & WAL)
+
+Dartus is an HTTP client. It does **not** handle SUI gas or WAL tokens directly.
+
+| Component | Who Pays | What Happens |
+|-----------|----------|---------------|
+| **Publisher** | Publisher operator | Pays SUI gas + WAL for storage |
+| **Aggregator** | Free | Reads are free, no tokens needed |
+| **Dartus SDK** | Nothing | Pure HTTP—no wallet integration |
+
+**Testnet**: Public publishers (e.g., `publisher.walrus-testnet.walrus.space`) subsidize costs. Free for developers.
+
+**Mainnet**: No free public publishers. Options:
+
+1. Run your own publisher with a funded Sui wallet
+2. Use an authenticated publisher service
+3. Wait for sponsored storage solutions
+
+This design keeps Flutter/Dart apps simple—no Sui wallet SDK needed on the client.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
