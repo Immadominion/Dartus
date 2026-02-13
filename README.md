@@ -2,7 +2,7 @@
 
 ![Walrus SDK banner](./banner.png)
 
-**Dartus** is a Dart SDK for [Walrus](https://walrus.site) decentralized blob storage.
+**Dartus** is a Dart SDK for [Walrus](https://walrus.xyz) decentralized blob storage.
 
 ## Features
 
@@ -210,6 +210,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Links
 
-- [Walrus Documentation](https://docs.walrus.site)
+- [Walrus Documentation](https://docs.wal.app)
 - [Issue Tracker](https://github.com/Immadominion/Dartus/issues)
 - [Changelog](CHANGELOG.md)
