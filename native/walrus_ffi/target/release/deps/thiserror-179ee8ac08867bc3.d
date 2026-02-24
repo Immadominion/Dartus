@@ -1,0 +1,14 @@
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/deps/thiserror-179ee8ac08867bc3.d: /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/build/thiserror-0f0a3331a73d4b54/out/private.rs
+
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/deps/libthiserror-179ee8ac08867bc3.rlib: /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/build/thiserror-0f0a3331a73d4b54/out/private.rs
+
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/deps/libthiserror-179ee8ac08867bc3.rmeta: /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/build/thiserror-0f0a3331a73d4b54/out/private.rs
+
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/build/thiserror-0f0a3331a73d4b54/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/build/thiserror-0f0a3331a73d4b54/out

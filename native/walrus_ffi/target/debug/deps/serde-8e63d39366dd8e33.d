@@ -1,0 +1,14 @@
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/debug/deps/serde-8e63d39366dd8e33.d: /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/debug/build/serde-42e23fed40add71b/out/private.rs
+
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/debug/deps/libserde-8e63d39366dd8e33.rlib: /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/debug/build/serde-42e23fed40add71b/out/private.rs
+
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/debug/deps/libserde-8e63d39366dd8e33.rmeta: /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/debug/build/serde-42e23fed40add71b/out/private.rs
+
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/debug/build/serde-42e23fed40add71b/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/debug/build/serde-42e23fed40add71b/out

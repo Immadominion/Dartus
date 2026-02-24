@@ -1,0 +1,22 @@
+[package]
+name = "walrus_ffi"
+version = "0.2.0"
+edition = "2021"
+description = "C-ABI FFI bridge for canonical Walrus encoding — thin wrapper around walrus-core, used by the Dartus Dart SDK via dart:ffi"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# Use the official walrus-core crate directly — same approach as the TS SDK's
+# walrus-wasm bridge. This guarantees bit-identical blob IDs, Merkle roots,
+# and slivers with the Walrus network.
+walrus-core = { git = "https://github.com/MystenLabs/walrus.git", branch = "main" }
+
+[profile.release]
+lto = true
+opt-level = "s"
+codegen-units = 1
+strip = true

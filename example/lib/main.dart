@@ -6,6 +6,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+/// Dartus SDK example — HTTP-mode upload and download demo.
+///
+/// This app demonstrates [WalrusClient] for uploading images to Walrus
+/// testnet and downloading them by blob ID. It uses the official testnet
+/// publisher and aggregator endpoints.
 void main() {
   runApp(const WalrusDemoApp());
 }
@@ -70,17 +75,22 @@ class _WalrusDemoAppState extends State<WalrusDemoApp> {
   }
 }
 
+/// Wraps a [WalrusClient] configured for the Walrus testnet.
+///
+/// Uses the official Walrus testnet publisher and aggregator endpoints.
+/// Modify the URLs below if you are running your own publisher/aggregator.
 class WalrusManager {
   WalrusManager()
     : client = WalrusClient(
         publisherBaseUrl: Uri.parse(
-          'https://walrus-testnet-publisher.starduststaking.com', //this endpoint was changed to https to avoid 301 redirects
+          'https://publisher.walrus-testnet.walrus.space',
         ),
-        aggregatorBaseUrl: Uri.parse('https://agg.test.walrus.eosusa.io'),
+        aggregatorBaseUrl: Uri.parse(
+          'https://aggregator.walrus-testnet.walrus.space',
+        ),
         timeout: const Duration(seconds: 30),
         cacheMaxSize: 100,
-        useSecureConnection: false, // testnet certs are currently untrusted
-        // logLevel: WalrusLogLevel.basic,
+        useSecureConnection: true,
       );
 
   final WalrusClient client;

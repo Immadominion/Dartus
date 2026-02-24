@@ -1,0 +1,12 @@
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/deps/spki-5dd442fb0856ee4e.d: /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/lib.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/algorithm.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/error.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/spki.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/traits.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/../README.md
+
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/deps/libspki-5dd442fb0856ee4e.rlib: /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/lib.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/algorithm.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/error.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/spki.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/traits.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/../README.md
+
+/Users/mac/Documents/codes/opensauce/walrus/Dartus/native/walrus_ffi/target/release/deps/libspki-5dd442fb0856ee4e.rmeta: /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/lib.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/algorithm.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/error.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/spki.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/traits.rs /Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/../README.md
+
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/lib.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/algorithm.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/error.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/spki.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/traits.rs:
+/Users/mac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.6.0/src/../README.md:

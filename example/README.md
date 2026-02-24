@@ -1,21 +1,37 @@
-# Dartus Flutter demo
+# Dartus Example
 
-This Flutter app mirrors the iOS sample by letting you upload a photo to Walrus and fetch it back with the blob ID.
+A minimal Flutter app demonstrating the Dartus SDK's HTTP mode.
 
-## Run the demo
-1. Install Flutter 3.35.0 (or newer) and enable the platforms you plan to test.
-2. From this directory, fetch dependencies:
-   ```bash
-   flutter pub get
-   ```
-3. Generate platform folders since they are missing (keeps the file lightweight and more readable, hehe):
-   ```bash
-   flutter create . --platforms=android,ios,macos
-   ```
-4. Update iOS `ios/Runner/Info.plist` or where necessary with the photo library permissions required by `image_picker` (see plugin README, in case setup changes).
-5. Launch the app:
-   ```bash
-   flutter run
-   ```
+## Features
 
-The app uses the same testnet endpoints as the Swift demo. WalrusClient prints basic lifecycle logs to your run console automatically; call `setLogLevel(WalrusLogLevel.verbose)` in code if you need more detail.
+- **Upload Tab** — Pick an image from your device and upload it to Walrus testnet via `WalrusClient.putBlob()`
+- **Fetch Tab** — Enter a blob ID and download the image via `WalrusClient.getBlobByObjectId()`
+
+## Running
+
+```bash
+cd Dartus/example
+flutter pub get
+flutter run -d macos    # macOS
+flutter run -d ios      # iOS simulator
+flutter run -d android  # Android emulator
+```
+
+## Configuration
+
+The app uses official Walrus testnet endpoints by default:
+
+- Publisher: `https://publisher.walrus-testnet.walrus.space`
+- Aggregator: `https://aggregator.walrus-testnet.walrus.space`
+
+Edit the `WalrusManager` constructor in `lib/main.dart` to change endpoints.
+
+## Platform Notes
+
+- **macOS** — Network entitlements are pre-configured.
+- **iOS** — Photo library permission (`NSPhotoLibraryUsageDescription`) is in `Info.plist`.
+- **Android** — Works out of the box.
+
+## Full Showcase App
+
+For a comprehensive demo covering all Dartus features (HTTP uploads, direct-mode reads/writes, wallet management, quilts, encoding, BLS, system state), see the [Dartus-Demo](https://github.com/Immadominion/Dartus-Demo) repository.

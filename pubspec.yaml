@@ -1,15 +1,32 @@
 name: dartus
-description: Dart SDK for Walrus decentralized blob storage with caching, streaming, and authentication.
-version: 0.1.1
+description: >-
+  Dart SDK for Walrus decentralized blob storage. Supports HTTP mode
+  (publisher/aggregator), direct storage-node interaction with wallet
+  integration, client-side erasure coding via Rust FFI, quilts, and
+  file abstractions.
+version: 0.2.0
 repository: https://github.com/Immadominion/Dartus
 homepage: https://github.com/Immadominion/Dartus
+issue_tracker: https://github.com/Immadominion/Dartus/issues
+documentation: https://pub.dev/documentation/dartus/latest/
+topics:
+  - walrus
+  - storage
+  - blockchain
+  - sui
+  - decentralized
 
 environment:
   sdk: ">=3.9.2 <4.0.0"
+  flutter: ">=3.35.0"
 
 dependencies:
+  bls_dart: ^0.1.0
   crypto: ^3.0.7
+  ffi: ^2.1.4
+  http: ^1.2.0
   meta: ^1.16.0
+  sui: ^0.3.7
 
 dev_dependencies:
   lints: ^5.0.0

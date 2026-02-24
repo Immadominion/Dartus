@@ -3,7 +3,7 @@ library;
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dartus/dartus.dart';
+import 'package:dartus/src/client/walrus_client.dart';
 import 'package:test/test.dart';
 
 import 'test_config.dart';

@@ -8,7 +8,7 @@ This document describes the security measures and testing performed for the Dart
 |----------|--------|---------|
 | Static Analysis | ✔ Pass | `dart analyze --fatal-infos` with strict settings |
 | Type Safety | ✔ Enabled | `strict-casts`, `strict-inference`, `strict-raw-types` |
-| Unit Tests | ✔ 133 passing | Comprehensive coverage of all components |
+| Unit Tests | ✔ 395+ passing | Comprehensive coverage of all components |
 | Integration Tests | ✔ 2 passing | End-to-end testnet verification |
 | Dependency Audit | ✔ Clean | No known vulnerabilities in dependencies |
 | Code Review | ✔ Complete | Manual review of HTTP handling, auth, caching |
@@ -126,10 +126,12 @@ All dependencies are from pub.dev with no known vulnerabilities:
 
 | Dependency | Purpose | Risk |
 |------------|---------|------|
-| `http` | HTTP requests | Low (maintained by Dart team) |
 | `crypto` | SHA-256 hashing | Low (maintained by Dart team) |
+| `http` | HTTP requests | Low (maintained by Dart team) |
+| `ffi` | Rust FFI bindings | Low (maintained by Dart team) |
 | `meta` | Annotations | None |
-| `path` | File path handling | Low (maintained by Dart team) |
+| `sui` | Sui blockchain client | Medium (third-party: mofalabs.com) |
+| `bls_dart` | BLS12-381 signatures | Medium (local; uses flutter_rust_bridge + blst) |
 
 Run `dart pub outdated` to check for updates.
 
@@ -227,8 +229,9 @@ dart format --set-exit-if-changed .
 
 | Version | Security Updates |
 |---------|------------------|
+| 0.2.0 | Added Phase 2/3 security review; updated test counts; FFI safety audit |
 | 0.1.0 | Initial release with security baseline |
 
 ---
 
-*Last updated: January 2026*
+*Last updated: February 2026*

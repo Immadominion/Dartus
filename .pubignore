@@ -1,0 +1,40 @@
+# Rust/FFI build artifacts (796 MB+ of compiled objects)
+native/walrus_ffi/target/
+
+# Build outputs
+build/
+
+# Generated documentation (publish generates its own)
+doc/
+
+# Test artifacts
+.test_coverage.dart
+coverage/
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary / backup files
+*.tmp
+*.bak
+*~
+
+# Git metadata
+.git/
+.gitignore
+
+# CI/CD
+.github/
+
+# Environment files
+.env
+.env.local
+
+# pubspec overrides (local dev only)
+pubspec_overrides.yaml
