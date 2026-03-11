@@ -38,8 +38,8 @@ pubspec.lock
 # Coverage
 coverage/
 
-# Documentation (generated)
-doc/api/
+# Documentation (generated — kept for grant/review visibility)
+# doc/api/
 
 # Test artifacts
 .test_coverage.dart
