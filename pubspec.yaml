@@ -21,7 +21,7 @@ environment:
   flutter: ">=3.35.0"
 
 dependencies:
-  bls_dart: ^0.1.0
+  bls_dart: ^0.1.2
   crypto: ^3.0.7
   ffi: ^2.1.4
   http: ^1.2.0
