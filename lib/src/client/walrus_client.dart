@@ -61,11 +61,7 @@ class WalrusClient {
     if (httpClient == null && !_useSecureConnection) {
       _httpClient.badCertificateCallback = (_, __, ___) => true;
     }
-    _executor = RequestExecutor(
-      _httpClient,
-      timeout,
-      onVerboseLog: logVerbose,
-    );
+    _executor = RequestExecutor(_httpClient, timeout, onVerboseLog: logVerbose);
   }
 
   final Uri publisherBaseUrl;

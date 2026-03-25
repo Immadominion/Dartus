@@ -159,8 +159,12 @@ class WalrusLogger {
   }
 
   /// Log an error.
-  void error(String message, {Object? error, StackTrace? stackTrace}) =>
-      _emit(WalrusLogLevel.error, message, error: error, stackTrace: stackTrace);
+  void error(String message, {Object? error, StackTrace? stackTrace}) => _emit(
+    WalrusLogLevel.error,
+    message,
+    error: error,
+    stackTrace: stackTrace,
+  );
 
   /// Log a warning.
   void warning(String message) => _emit(WalrusLogLevel.warning, message);
