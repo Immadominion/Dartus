@@ -4,15 +4,35 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../cache/blob_cache.dart';
+import '../logging/walrus_logging.dart';
 import '../models/walrus_api_error.dart';
 import '../network/request_executor.dart';
 
-enum WalrusLogLevel { none, basic, verbose }
+// Re-export logging types so consumers importing walrus_client.dart
+// get WalrusLogLevel, WalrusLogger, etc. without a separate import.
+export '../logging/walrus_logging.dart';
 
-enum _WalrusLogKind { info, verbose, warning, error }
-
-/// High-level Walrus API client matching the Swift SDK surface area with
-/// built-in console logging controlled through [WalrusLogLevel].
+/// High-level Walrus API client for HTTP publisher/aggregator operations
+/// with configurable logging via [WalrusLogger].
+///
+/// Logging is controlled through the [logger] property. Set a log level
+/// at construction time, change it at runtime, or provide a custom handler:
+///
+/// ```dart
+/// final client = WalrusClient(
+///   publisherBaseUrl: publisherUrl,
+///   aggregatorBaseUrl: aggregatorUrl,
+///   logLevel: WalrusLogLevel.info,
+/// );
+///
+/// // Adjust at runtime
+/// client.logger.level = WalrusLogLevel.debug;
+///
+/// // Route to your own logging system
+/// client.logger.onRecord = (record) {
+///   myLogger.log(record.level.name, record.message);
+/// };
+/// ```
 class WalrusClient {
   /// Configures a client with publisher and aggregator endpoints.
   WalrusClient({
@@ -24,14 +44,15 @@ class WalrusClient {
     bool useSecureConnection = false,
     String? jwtToken,
     HttpClient? httpClient,
-    WalrusLogLevel logLevel = WalrusLogLevel.basic,
+    WalrusLogLevel logLevel = WalrusLogLevel.none,
+    WalrusLogHandler? onLog,
   }) : publisherBaseUrl = _normalizeBaseUrl(publisherBaseUrl),
        aggregatorBaseUrl = _normalizeBaseUrl(aggregatorBaseUrl),
        cache = BlobCache(cacheDirectory: cacheDirectory, maxSize: cacheMaxSize),
        _jwtToken = jwtToken,
        _useSecureConnection = useSecureConnection,
        _providedHttpClient = httpClient,
-       _logLevel = logLevel {
+       logger = WalrusLogger(level: logLevel, onRecord: onLog) {
     if (cacheMaxSize <= 0) {
       throw ArgumentError('cacheMaxSize must be greater than zero');
     }
@@ -40,7 +61,11 @@ class WalrusClient {
     if (httpClient == null && !_useSecureConnection) {
       _httpClient.badCertificateCallback = (_, __, ___) => true;
     }
-    _executor = RequestExecutor(_httpClient, timeout, onVerboseLog: logVerbose);
+    _executor = RequestExecutor(
+      _httpClient,
+      timeout,
+      onVerboseLog: logVerbose,
+    );
   }
 
   final Uri publisherBaseUrl;
@@ -48,83 +73,39 @@ class WalrusClient {
   final Duration timeout;
   final BlobCache cache;
 
+  /// Logger for this client. Configure [WalrusLogger.level] or
+  /// [WalrusLogger.onRecord] to control output.
+  final WalrusLogger logger;
+
   final bool _useSecureConnection;
   final HttpClient? _providedHttpClient;
-  WalrusLogLevel _logLevel;
   late final HttpClient _httpClient;
   late final RequestExecutor _executor;
 
   String? _jwtToken;
 
-  WalrusLogLevel get logLevel => _logLevel;
+  /// The current log level. Shorthand for `logger.level`.
+  WalrusLogLevel get logLevel => logger.level;
 
-  /// Updates the log level for subsequent messages.
+  /// Updates the log level. Shorthand for setting `logger.level`.
   void setLogLevel(WalrusLogLevel level) {
-    if (_logLevel == level) {
-      return;
-    }
-    _logLevel = level;
-    logInfo('Log level changed to ${level.name.toUpperCase()}');
+    if (logger.level == level) return;
+    logger.level = level;
+    logger.info('Log level changed to ${level.name.toUpperCase()}');
   }
 
   /// Emits an informational log when [logLevel] allows it.
-  void logInfo(String message) {
-    _log(_WalrusLogKind.info, message);
-  }
+  void logInfo(String message) => logger.info(message);
 
-  /// Emits a verbose log. Only printed when [logLevel] is [WalrusLogLevel.verbose].
-  void logVerbose(String message) {
-    _log(_WalrusLogKind.verbose, message);
-  }
+  /// Emits a verbose log.
+  void logVerbose(String message) => logger.verbose(message);
 
-  /// Emits a warning log when [logLevel] is not [WalrusLogLevel.none].
-  void logWarning(String message) {
-    _log(_WalrusLogKind.warning, message);
-  }
+  /// Emits a warning log.
+  void logWarning(String message) => logger.warning(message);
 
   /// Emits an error log, optionally with [error] and [stackTrace] context.
-  void logError(String message, {Object? error, StackTrace? stackTrace}) {
-    _log(_WalrusLogKind.error, message, error: error, stackTrace: stackTrace);
-  }
-
-  bool _shouldLog(_WalrusLogKind kind) {
-    if (_logLevel == WalrusLogLevel.none) {
-      return false;
-    }
-    if (_logLevel == WalrusLogLevel.basic && kind == _WalrusLogKind.verbose) {
-      return false;
-    }
-    return true;
-  }
-
-  void _log(
-    _WalrusLogKind kind,
-    String message, {
-    Object? error,
-    StackTrace? stackTrace,
-  }) {
-    if (!_shouldLog(kind)) {
-      return;
-    }
-
-    final timestamp = DateTime.now().toIso8601String();
-    final levelLabel = switch (kind) {
-      _WalrusLogKind.info => 'INFO',
-      _WalrusLogKind.verbose => 'VERBOSE',
-      _WalrusLogKind.warning => 'WARN',
-      _WalrusLogKind.error => 'ERROR',
-    };
-
-    final buffer = StringBuffer('[$timestamp] Walrus $levelLabel: $message');
-    if (error != null) {
-      buffer.write(' → $error');
-    }
-
-    stdout.writeln(buffer.toString());
-    if (stackTrace != null) {
-      stdout.writeln(stackTrace);
-    }
-  }
+  void logError(String message, {Object? error, StackTrace? stackTrace}) =>
+      logger.error(message, error: error, stackTrace: stackTrace);
 
   /// Releases the underlying HTTP client and cache resources.
   Future<void> close({bool force = false}) async {

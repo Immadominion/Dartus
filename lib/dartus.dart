@@ -54,6 +54,7 @@
 /// * Metadata: [WalrusClient.getBlobMetadata]
 /// * Caching: [BlobCache] with LRU eviction
 /// * Authentication: JWT via [WalrusClient.setJwtToken]
+/// * Logging: [WalrusLogger] with six levels and custom handler support
 /// * Error handling: [WalrusApiError]
 ///
 /// ### Phase 2 — Wallet Integration & Upload Relay
@@ -77,6 +78,7 @@ library;
 // Phase 1 — HTTP Publisher/Aggregator
 export 'src/cache/blob_cache.dart';
 export 'src/client/walrus_client.dart';
+export 'src/logging/walrus_logging.dart';
 export 'src/models/walrus_api_error.dart';
 
 // Phase 2 — Wallet Integration & Upload Relay

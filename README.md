@@ -41,7 +41,7 @@ Dartus supports three modes, each building on the previous:
 - **Caching**: Disk-based LRU cache with SHA-256 filenames, configurable size limits
 - **Auth**: JWT support via instance-level or per-call tokens
 - **TLS**: Configurable certificate validation
-- **Logging**: Three-level console logging (`none`, `basic`, `verbose`)
+- **Logging**: Six-level structured logging (`none`, `error`, `warning`, `info`, `debug`, `verbose`) with custom handler support
 - **Network presets**: `WalrusNetwork.testnet` / `WalrusNetwork.mainnet` with pre-configured package IDs
 - **BLS12-381**: Cryptographic operations via [`bls_dart`](https://pub.dev/packages/bls_dart)
 
@@ -295,7 +295,8 @@ WalrusClient({
   int cacheMaxSize = 100,
   bool useSecureConnection = false,
   String? jwtToken,
-  WalrusLogLevel logLevel = WalrusLogLevel.basic,
+  WalrusLogLevel logLevel = WalrusLogLevel.none, // silent by default
+  WalrusLogHandler? onLog,                       // custom log routing
 })
 ```
 
@@ -378,6 +379,56 @@ for (final f in files) {
 | `encodeQuilt(blobs)` | Encode multiple blobs into quilt format |
 | `computeBlobId(rootHash, unencodedLength, encodingType)` | Compute blob ID from encoding metadata |
 
+## Logging
+
+Logging is silent by default. Enable it by setting a log level:
+
+```dart
+// At construction
+final client = WalrusClient(
+  publisherBaseUrl: publisherUrl,
+  aggregatorBaseUrl: aggregatorUrl,
+  logLevel: WalrusLogLevel.info, // show info messages and above
+);
+
+// Or for direct mode
+final directClient = WalrusDirectClient.fromNetwork(
+  network: WalrusNetwork.testnet,
+  logLevel: WalrusLogLevel.debug,
+);
+```
+
+### Log Levels
+
+| Level | Output |
+|-------|--------|
+| `none` | Silent (default) |
+| `error` | Errors only |
+| `warning` | Warnings + errors |
+| `info` | Key events: uploads, downloads, cache hits/misses |
+| `debug` | Internal decisions, transaction building, retry logic |
+| `verbose` | Every HTTP request/response, sliver operations |
+
+### Custom Log Handler
+
+Route SDK logs to your own logging system:
+
+```dart
+final client = WalrusClient(
+  publisherBaseUrl: publisherUrl,
+  aggregatorBaseUrl: aggregatorUrl,
+  logLevel: WalrusLogLevel.info,
+  onLog: (record) {
+    // record.level, record.message, record.time, record.error
+    myLogger.log(record.level.name, record.message);
+  },
+);
+
+// Or change at runtime
+client.logger.level = WalrusLogLevel.verbose;
+client.logger.onRecord = (record) => print(record);
+```
+
 ## TLS Configuration
 
 ```dart
@@ -420,17 +471,22 @@ print('Total:   ${cost.totalCost} WAL');
 
 ## Testing
 
+Dartus has 473+ tests covering all three operational modes.
+
 ```bash
 cd Dartus
 
-# Run all tests (395+)
+# Run ALL tests (recommended — includes Phase 2/3 tests)
+flutter test
+
+# Run Phase 1 tests only (no Flutter SDK required)
 dart test
 
 # Specific suite
-dart test test/blob_cache_test.dart
+flutter test test/blob_cache_test.dart
 
 # Verbose output
-dart test --reporter expanded
+flutter test --reporter expanded
 
 # Static analysis (strict mode)
 dart analyze --fatal-infos
@@ -438,6 +494,11 @@ dart analyze --fatal-infos
 # Format check
 dart format --set-exit-if-changed .
 ```
+
+> **Note**: 5 test files (`read_committee_test`, `object_data_loader_test`, `epoch_state_test`,
+> `wal_exchange_test`, `blob_attributes_test`) require `flutter test` because they import
+> `package:sui` which transitively depends on `dart:ui`. Running `dart test` will show these
+> as failures — this is expected. Use `flutter test` for the complete suite.
 
 ## Example Apps
 

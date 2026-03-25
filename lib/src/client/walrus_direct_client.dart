@@ -21,6 +21,7 @@ import 'dart:typed_data';
 
 import 'package:sui/sui.dart';
 
+import '../logging/walrus_logging.dart';
 import '../chain/committee_resolver.dart';
 import '../chain/system_state_reader.dart';
 import '../constants/walrus_constants.dart';
@@ -175,6 +176,10 @@ class WalrusDirectClient {
   /// direct-mode on-chain certification with multiple signers.
   final BlsProvider? blsProvider;
 
+  /// Logger for this client. Configure [WalrusLogger.level] or
+  /// [WalrusLogger.onRecord] to control output.
+  final WalrusLogger logger;
+
   WalrusDirectClient({
     this.network,
     WalrusPackageConfig? packageConfig,
@@ -183,13 +188,16 @@ class WalrusDirectClient {
     this.uploadRelayConfig,
     this.encoder,
     this.blsProvider,
+    WalrusLogLevel logLevel = WalrusLogLevel.none,
+    WalrusLogHandler? onLog,
   }) : packageConfig =
            packageConfig ??
            network?.packageConfig ??
            (throw ArgumentError(
              'Either network or packageConfig must be provided',
            )),
-       _walrusPackageId = walrusPackageId {
+       _walrusPackageId = walrusPackageId,
+       logger = WalrusLogger(level: logLevel, onRecord: onLog) {
     _stateReader = SystemStateReader(
       suiClient: suiClient,
       config: this.packageConfig,
@@ -217,6 +225,8 @@ class WalrusDirectClient {
     UploadRelayConfig? uploadRelay,
     BlobEncoder? encoder,
     BlsProvider? blsProvider,
+    WalrusLogLevel logLevel = WalrusLogLevel.none,
+    WalrusLogHandler? onLog,
   }) {
     return WalrusDirectClient(
       network: network,
@@ -229,6 +239,8 @@ class WalrusDirectClient {
               : null),
       encoder: encoder,
       blsProvider: blsProvider,
+      logLevel: logLevel,
+      onLog: onLog,
     );
   }
 
@@ -2875,10 +2887,11 @@ class WalrusDirectClient {
 
   /// Debug: dump all commands in a transaction before submission.
   void _debugDumpTransaction(String label, Transaction tx) {
+    if (!WalrusLogLevel.debug.isEnabledFor(logger.level)) return;
+
     final data = tx.getData();
     final cmds = data.commands ?? [];
-    // ignore: avoid_print
-    print('[Dartus DEBUG] $label: ${cmds.length} commands');
+    logger.debug('$label: ${cmds.length} commands');
     for (var i = 0; i < cmds.length; i++) {
       final cmd = cmds[i];
       final kind = cmd['\$kind'] ?? cmd['kind'] ?? 'unknown';
@@ -2907,8 +2920,7 @@ class WalrusDirectClient {
       } else {
         detail = cmd.toString();
       }
-      // ignore: avoid_print
-      print('[Dartus DEBUG]   cmd[$i] $kind: $detail');
+      logger.debug('  cmd[$i] $kind: $detail');
     }
   }
 

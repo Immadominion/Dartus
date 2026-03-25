@@ -1,5 +1,17 @@
 # Dartus SDK Test Configuration
 # See https://github.com/dart-lang/test/blob/master/pkgs/test/doc/configuration.md
+#
+# IMPORTANT: Use `flutter test` to run the full suite (473+ tests).
+# Running `dart test` works for Phase 1 (HTTP) tests but will fail on
+# 5 Phase 2/3 test files that import `package:sui` (which transitively
+# depends on `dart:ui`). This is expected behaviour, not a bug.
+#
+# Failing with `dart test` (use `flutter test` instead):
+#   - read_committee_test.dart
+#   - object_data_loader_test.dart
+#   - epoch_state_test.dart
+#   - wal_exchange_test.dart
+#   - blob_attributes_test.dart
 
 # Define tags for categorizing tests
 tags:

@@ -29,6 +29,8 @@ migrate_working_dir/
 pubspec.lock
 
 # Generated files
+.flutter-plugins
+.flutter-plugins-dependencies
 *.dart.js
 *.dart.js.map
 *.dart.js.deps

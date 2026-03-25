@@ -5,7 +5,7 @@ All notable changes to Dartus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - 2026-02-24
+## [0.2.0] - 2026-03-25
 
 ### Added
 
@@ -77,16 +77,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `WalrusPackageConfig` — walrus package ID, system/staking/exchange object IDs
 
 ### Changed
+
+#### Logging System
+- **Breaking**: Logging is now silent by default (`WalrusLogLevel.none`). Previously defaulted to `basic`.
+  Set `logLevel: WalrusLogLevel.info` to restore previous behavior.
+- Extracted logging into standalone `WalrusLogger` class — accessible via `client.logger`
+- Expanded log levels: `none`, `error`, `warning`, `info`, `basic` (alias for info), `debug`, `verbose`
+- Added `WalrusLogHandler` callback for custom log routing (integrate with your own logger)
+- Added `WalrusLogRecord` structured log records with timestamp, level, message, error, stackTrace
+- Added `onLog` parameter to both `WalrusClient` and `WalrusDirectClient` constructors
+- Logs now output to `stderr` instead of `stdout` (standard practice for libraries)
+- Replaced internal debug `print()` statements with proper `debug`-level logging
+
+#### General
 - README rewritten to cover all three operational modes (HTTP, relay, direct)
 - Comprehensive error handling documentation added
 - `flutter` constraint updated to `>=3.35.0` (was `>=3.0.0`)
-- Version bumped to 0.2.0 for major feature additions
+- Added `sui: ^0.3.7`, `bls_dart: ^0.1.2`, `ffi: ^2.1.4`, `http: ^1.2.0` dependencies
+- Test suite expanded from 8 files to 30 files (473+ tests)
+- Added `issue_tracker`, `documentation` URLs and `topics` to pubspec
 
 ### Removed
 - `fountain_codes` dependency — replaced by Rust FFI
 - `test_destroy_zero.dart` — debugging script removed
 - `build_native.sh` — relocated to `native/build.sh`
 - Empty `docs/` directory
+- Bare `print('[Dartus DEBUG]...')` statements — now routed through `WalrusLogger`
+
+### Notes
+- Phase 2/3 tests (5 test files) require `flutter test` instead of `dart test` due to
+  `package:sui` → `dart:ui` dependency. All 473 tests pass with `flutter test`.
+
+## [0.1.2] - 2026-03-11
+
+### Added
+- Include generated API documentation (`doc/api/`) in the published package
+- Updated banner with Walrus Foundation logo
 
 ## [0.1.1] - 2026-02-06
 

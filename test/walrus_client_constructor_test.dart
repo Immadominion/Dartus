@@ -178,14 +178,14 @@ void main() {
       }
     });
 
-    test('defaults to basic log level', () {
+    test('defaults to none log level', () {
       final client = WalrusClient(
         publisherBaseUrl: Uri.parse('https://publisher.example.com'),
         aggregatorBaseUrl: Uri.parse('https://aggregator.example.com'),
         cacheDirectory: tempDir,
       );
 
-      expect(client.logLevel, equals(WalrusLogLevel.basic));
+      expect(client.logLevel, equals(WalrusLogLevel.none));
       client.close();
     });
 
