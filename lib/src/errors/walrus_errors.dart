@@ -9,9 +9,16 @@
 /// 2. **Storage-node HTTP errors** (`StorageNodeError` and subtypes) — raised
 ///    when a storage node returns an unexpected HTTP status code.
 ///
-/// Retryable errors extend [RetryableWalrusClientError]. The client can
-/// catch these, reset cached state, and retry the operation (e.g. after an
-/// epoch change).
+/// Retryable errors extend [RetryableWalrusClientError]. These errors are
+/// thrown only by [WalrusDirectClient] (direct mode). To recover, call
+/// [WalrusDirectClient.reset] to clear cached protocol state and retry the
+/// operation (e.g. after an epoch change), or use the built-in
+/// [WalrusDirectClient.retryOnPossibleEpochChange] wrapper, which resets and
+/// retries for you.
+///
+/// HTTP-mode [WalrusClient] does not throw these errors and has no cached
+/// protocol state to reset: it surfaces transport and server failures as
+/// [WalrusApiError].
 library;
 
 // ---------------------------------------------------------------------------
