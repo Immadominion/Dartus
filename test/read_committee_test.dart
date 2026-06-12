@@ -10,7 +10,7 @@ library;
 import 'package:test/test.dart';
 import 'package:sui/sui.dart';
 
-import 'package:dartus/dartus.dart';
+import 'package:dartus/direct.dart';
 
 void main() {
   group('WalrusDirectClient read committee API', () {
