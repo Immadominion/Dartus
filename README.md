@@ -117,7 +117,7 @@ void main() async {
 ## Quick Start — Direct Mode
 
 ```dart
-import 'package:dartus/dartus.dart';
+import 'package:dartus/direct.dart';
 import 'package:sui/sui.dart';
 
 void main() async {

@@ -11,9 +11,9 @@
 /// ## Quick Start — HTTP Mode
 ///
 /// ```dart
-/// import 'package:dartus/direct.dart';
+/// import 'package:dartus/dartus.dart';
 ///
-/// final client = WalrusDirectClient.fromNetwork(
+/// final client = WalrusDirect(
 ///   publisherBaseUrl: Uri.parse('https://publisher.walrus-testnet.walrus.space'),
 ///   aggregatorBaseUrl: Uri.parse('https://aggregator.walrus-testnet.walrus.space'),
 /// );
@@ -27,7 +27,7 @@
 /// await client.close();
 /// ```
 ///
-/// ## Quick Start — Direct Mode
+/// ## Quick Start — Direct Mode (native only)
 ///
 /// ```dart
 /// import 'package:dartus/direct.dart';
@@ -91,7 +91,10 @@ export 'src/models/protocol_types.dart';
 export 'src/upload_relay/upload_relay_client.dart';
 
 // Phase 3 — Full Direct Mode (Client-Side Encoding)
-// NOTE: FFI surface moved to package:dartus/direct.dart (not web-safe)
+// NOTE: the Rust FFI surface (WalrusBlobEncoder, WalrusFfiBindings,
+// WalrusDirectClient, WriteBlobFlow, WriteFilesFlow) is exported from
+// `package:dartus/direct.dart` instead — it imports `dart:ffi`, which is not
+// available on web. Keep this barrel free of `dart:ffi` so HTTP mode builds for web.
 export 'src/errors/walrus_errors.dart';
 export 'src/models/storage_node_types.dart';
 export 'src/storage_node/storage_node_client.dart';

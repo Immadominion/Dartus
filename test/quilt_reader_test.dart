@@ -322,10 +322,7 @@ void main() {
             contents: utf8.encode('Content A'),
             identifier: 'alpha.txt',
           ),
-          QuiltBlob(
-            contents: utf8.encode('Content B'),
-            identifier: 'beta.txt',
-          ),
+          QuiltBlob(contents: utf8.encode('Content B'), identifier: 'beta.txt'),
           QuiltBlob(
             contents: utf8.encode('Content C'),
             identifier: 'charlie.txt',
@@ -452,10 +449,7 @@ void main() {
         endIndex: 5,
       );
 
-      expect(
-        () => quiltReader.readerForPatchId(patchId),
-        throwsArgumentError,
-      );
+      expect(() => quiltReader.readerForPatchId(patchId), throwsArgumentError);
     });
   });
 
@@ -463,10 +457,7 @@ void main() {
     test('getIdentifier returns pre-set identifier', () async {
       final quiltResult = encodeQuilt(
         blobs: [
-          QuiltBlob(
-            contents: utf8.encode('Test'),
-            identifier: 'test.txt',
-          ),
+          QuiltBlob(contents: utf8.encode('Test'), identifier: 'test.txt'),
         ],
         numShards: 1000,
       );
@@ -500,10 +491,7 @@ void main() {
 
       final blobs = files.entries
           .map(
-            (e) => QuiltBlob(
-              contents: utf8.encode(e.value),
-              identifier: e.key,
-            ),
+            (e) => QuiltBlob(contents: utf8.encode(e.value), identifier: e.key),
           )
           .toList();
 
@@ -539,7 +527,11 @@ void main() {
         QuiltBlob(
           contents: utf8.encode('Image data here'),
           identifier: 'photo.jpg',
-          tags: {'content-type': 'image/jpeg', 'width': '1920', 'height': '1080'},
+          tags: {
+            'content-type': 'image/jpeg',
+            'width': '1920',
+            'height': '1080',
+          },
         ),
         QuiltBlob(
           contents: utf8.encode('Document text'),
@@ -580,9 +572,7 @@ void main() {
       final largeBytes = Uint8List.fromList(largeContent);
 
       final quiltResult = encodeQuilt(
-        blobs: [
-          QuiltBlob(contents: largeBytes, identifier: 'large.bin'),
-        ],
+        blobs: [QuiltBlob(contents: largeBytes, identifier: 'large.bin')],
         numShards: 1000,
       );
 
