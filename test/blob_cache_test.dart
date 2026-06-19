@@ -131,7 +131,7 @@ void main() {
       expect(await cache.get(blobId), isNotNull);
 
       // Corrupt the file by deleting it manually
-      await file.delete();
+      await file!.delete();
 
       // Should return null and clean up index
       expect(await cache.get(blobId), isNull);
