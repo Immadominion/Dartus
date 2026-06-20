@@ -3,6 +3,7 @@ library;
 import 'dart:io';
 
 import 'package:dartus/src/client/walrus_client.dart';
+import 'package:http/http.dart' as http;
 import 'package:test/test.dart';
 
 void main() {
@@ -135,7 +136,7 @@ void main() {
     });
 
     test('accepts custom HttpClient', () {
-      final httpClient = HttpClient();
+      final httpClient = http.Client();
       final client = WalrusClient(
         publisherBaseUrl: Uri.parse('https://publisher.example.com'),
         aggregatorBaseUrl: Uri.parse('https://aggregator.example.com'),
@@ -305,8 +306,8 @@ void main() {
       await expectLater(client.close(force: true), completes);
     });
 
-    test('close does not close provided HttpClient', () async {
-      final httpClient = HttpClient();
+    test('close does not close provided http.Client', () async {
+      final httpClient = http.Client();
 
       final client = WalrusClient(
         publisherBaseUrl: Uri.parse('https://publisher.example.com'),
@@ -317,12 +318,9 @@ void main() {
       );
 
       await client.close();
-
-      // HttpClient should still be usable after client.close()
-      // (this doesn't throw if the client is still open)
-      expect(() => httpClient.connectionTimeout, returnsNormally);
-
-      httpClient.close();
+      // The provided client is owned by the caller and must remain usable;
+      // closing it here should not throw.
+      expect(httpClient.close, returnsNormally);
     });
   });
 

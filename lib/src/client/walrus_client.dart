@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
+
 import '../cache/blob_cache.dart';
 import '../logging/walrus_logging.dart';
 import '../models/walrus_api_error.dart';
@@ -41,26 +43,25 @@ class WalrusClient {
     this.timeout = const Duration(seconds: 30),
     Directory? cacheDirectory,
     int cacheMaxSize = 100,
+    // Retained for source compatibility. The package:http path validates TLS
+    // via the underlying platform (IOClient on native, the browser on web),
+    // so this flag is now a no-op.
     bool useSecureConnection = false,
     String? jwtToken,
-    HttpClient? httpClient,
+    http.Client? httpClient,
     WalrusLogLevel logLevel = WalrusLogLevel.none,
     WalrusLogHandler? onLog,
   }) : publisherBaseUrl = _normalizeBaseUrl(publisherBaseUrl),
        aggregatorBaseUrl = _normalizeBaseUrl(aggregatorBaseUrl),
        cache = BlobCache(cacheDirectory: cacheDirectory, maxSize: cacheMaxSize),
        _jwtToken = jwtToken,
-       _useSecureConnection = useSecureConnection,
        _providedHttpClient = httpClient,
        logger = WalrusLogger(level: logLevel, onRecord: onLog) {
     if (cacheMaxSize <= 0) {
       throw ArgumentError('cacheMaxSize must be greater than zero');
     }
 
-    _httpClient = httpClient ?? HttpClient();
-    if (httpClient == null && !_useSecureConnection) {
-      _httpClient.badCertificateCallback = (_, __, ___) => true;
-    }
+    _httpClient = httpClient ?? http.Client();
     _executor = RequestExecutor(_httpClient, timeout, onVerboseLog: logVerbose);
   }
 
@@ -73,9 +74,8 @@ class WalrusClient {
   /// [WalrusLogger.onRecord] to control output.
   final WalrusLogger logger;
 
-  final bool _useSecureConnection;
-  final HttpClient? _providedHttpClient;
-  late final HttpClient _httpClient;
+  final http.Client? _providedHttpClient;
+  late final http.Client _httpClient;
   late final RequestExecutor _executor;
 
   String? _jwtToken;
@@ -104,9 +104,12 @@ class WalrusClient {
       logger.error(message, error: error, stackTrace: stackTrace);
 
   /// Releases the underlying HTTP client and cache resources.
+  ///
+  /// The [force] flag is retained for source compatibility; `package:http`
+  /// closes idle connections on [http.Client.close].
   Future<void> close({bool force = false}) async {
     if (_providedHttpClient == null) {
-      _httpClient.close(force: force);
+      _httpClient.close();
     }
     await cache.dispose();
   }
@@ -350,10 +353,7 @@ class WalrusClient {
     final response = await _executor.send(method: 'HEAD', uri: uri);
 
     if (!_isSuccessStatus(response.statusCode)) {
-      final body = await response.fold<List<int>>(<int>[], (acc, chunk) {
-        acc.addAll(chunk);
-        return acc;
-      });
+      final body = await response.stream.toBytes();
       throw _buildErrorFromResponse(
         statusCode: response.statusCode,
         context: 'Error retrieving metadata for blob ID: $blobId',
@@ -362,11 +362,8 @@ class WalrusClient {
         reasonPhrase: response.reasonPhrase,
       );
     }
-
-    final headers = <String, String>{};
-    response.headers.forEach((name, values) {
-      headers[name] = values.join(', ');
-    });
+    await response.stream.drain<void>();
+    final headers = Map<String, String>.from(response.headers);
     logInfo('Retrieved metadata for blob $blobId');
     return headers;
   }
@@ -389,14 +386,13 @@ class WalrusClient {
 
   Map<String, String> _buildHeaders({String? jwtToken}) {
     final headers = <String, String>{
-      HttpHeaders.contentTypeHeader: 'application/octet-stream',
+      'content-type': 'application/octet-stream',
     };
 
     final token = jwtToken ?? _jwtToken;
     if (token != null && token.isNotEmpty) {
-      headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
+      headers['authorization'] = 'Bearer $token';
     }
-
     return headers;
   }
 
@@ -420,14 +416,11 @@ class WalrusClient {
   }
 
   Future<Uint8List> _readBinaryResponse(
-    HttpClientResponse response, {
+    http.StreamedResponse response, {
     required String context,
     String? cacheKey,
   }) async {
-    final bytes = await response.fold<List<int>>(<int>[], (acc, chunk) {
-      acc.addAll(chunk);
-      return acc;
-    });
+    final bytes = await response.stream.toBytes();
 
     if (!_isSuccessStatus(response.statusCode)) {
       throw _buildErrorFromResponse(
@@ -439,7 +432,7 @@ class WalrusClient {
       );
     }
 
-    final data = Uint8List.fromList(bytes);
+    final data = bytes;
     if (cacheKey != null) {
       try {
         await cache.put(cacheKey, data);
@@ -455,17 +448,14 @@ class WalrusClient {
   }
 
   Future<Uint8List> _readStreamingResponse(
-    HttpClientResponse response, {
+    http.StreamedResponse response, {
     required File destination,
     required String context,
   }) async {
     final builder = BytesBuilder(copy: false);
 
     if (!_isSuccessStatus(response.statusCode)) {
-      final body = await response.fold<List<int>>(<int>[], (acc, chunk) {
-        acc.addAll(chunk);
-        return acc;
-      });
+      final body = await response.stream.toBytes();
       throw _buildErrorFromResponse(
         statusCode: response.statusCode,
         context: context,
@@ -477,7 +467,7 @@ class WalrusClient {
 
     await destination.parent.create(recursive: true);
     final sink = destination.openWrite();
-    await response.forEach((chunk) {
+    await response.stream.forEach((chunk) {
       sink.add(chunk);
       builder.add(chunk);
     });
@@ -487,13 +477,10 @@ class WalrusClient {
   }
 
   Future<Map<String, dynamic>> _parseJsonResponse(
-    HttpClientResponse response, {
+    http.StreamedResponse response, {
     required String context,
   }) async {
-    final bytes = await response.fold<List<int>>(<int>[], (acc, chunk) {
-      acc.addAll(chunk);
-      return acc;
-    });
+    final bytes = await response.stream.toBytes();
 
     if (!_isSuccessStatus(response.statusCode)) {
       throw _buildErrorFromResponse(
@@ -526,7 +513,7 @@ class WalrusClient {
     required int statusCode,
     required String context,
     required List<int> bodyBytes,
-    required HttpHeaders headers,
+    required Map<String, String> headers,
     String? reasonPhrase,
   }) {
     if (bodyBytes.isNotEmpty) {
