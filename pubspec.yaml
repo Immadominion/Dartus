@@ -4,7 +4,7 @@ description: >-
   (publisher/aggregator), direct storage-node interaction with wallet
   integration, client-side erasure coding via Rust FFI, quilts, and
   file abstractions.
-version: 0.2.0
+version: 0.3.0
 repository: https://github.com/Immadominion/Dartus
 homepage: https://github.com/Immadominion/Dartus
 issue_tracker: https://github.com/Immadominion/Dartus/issues

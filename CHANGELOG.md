@@ -5,17 +5,35 @@ All notable changes to Dartus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-06-20
+
+Makes Dartus work on **Flutter Web** in HTTP mode. Contains breaking changes
+for direct-mode and custom-HTTP-client users (see below).
+
+### Changed (breaking)
+
+- **Web-safe public API split.** `package:dartus/dartus.dart` is now free of
+  `dart:ffi` and is the web-safe HTTP surface. The direct-mode + Rust FFI
+  surface (`WalrusDirectClient`, `WriteBlobFlow`, `WriteFilesFlow`,
+  `WalrusBlobEncoder`, `WalrusFfiBindings`) moved to a new entry point,
+  `package:dartus/direct.dart`. Direct-mode users must import
+  `package:dartus/direct.dart`.
+- `WalrusClient`'s `httpClient` parameter now takes a `package:http`
+  `http.Client` instead of a `dart:io` `HttpClient`. `useSecureConnection`
+  is now a no-op (TLS is handled by the platform).
+- `BlobCache.put()` now returns `File?` (`null` on web) instead of `File`.
 
 ### Fixed
 
-- Split the public API: `package:dartus/dartus.dart` is now web-safe (HTTP mode);
-- direct mode + Rust FFI moved to `package:dartus/direct.dart`. Direct-mode users should import `package:dartus/direct.dart`.
-
-- `BlobCache` now falls back to an in-memory store on the web instead of crashing with `Unsupported operation: _Namespace`.
-- Native platforms are unchanged (disk cache). `put()` now returns `File?` (`null` on web).
-- Migrated the HTTP transport (`RequestExecutor`, `WalrusClient`) from dart:io `HttpClient` to `package:http`, so HTTP networking works on web.
-- The `httpClient` parameter now takes an `http.Client`. `useSecureConnection` is now a no-op (TLS is handled by the platform).
+- HTTP mode now builds and runs on Flutter Web. Removed two web-blocking
+  `dart:io` crashes: `BlobCache` falls back to an in-memory store on web
+  (previously `Unsupported operation: _Namespace`), and the HTTP transport
+  (`RequestExecutor`, `WalrusClient`) moved from `dart:io` `HttpClient` to
+  `package:http` (`BrowserClient` on web, `IOClient` on native).
+- Clarified `RetryableWalrusClientError` docs: these are thrown only by
+  `WalrusDirectClient` (direct mode); recover via `reset()` or
+  `retryOnPossibleEpochChange()`. HTTP-mode `WalrusClient` surfaces failures
+  as `WalrusApiError`.
 
 ## [0.2.0] - 2026-03-25
 
