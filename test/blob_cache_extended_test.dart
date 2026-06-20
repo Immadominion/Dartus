@@ -24,7 +24,7 @@ void main() {
     });
 
     test('handles concurrent put operations', () async {
-      final futures = <Future<File>>[];
+      final futures = <Future<File?>>[];
 
       for (var i = 0; i < 5; i++) {
         futures.add(cache.put('blob-$i', Uint8List.fromList([i])));
