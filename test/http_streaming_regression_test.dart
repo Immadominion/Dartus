@@ -217,6 +217,43 @@ void main() {
     expect(await directory.list().length, 0);
   });
 
+  group('existing destinations are overwritten in place', () {
+    setUp(() {
+      useTransport(
+        _ResponseClient(
+          (_) async => http.StreamedResponse(Stream.value([1, 2, 3]), 200),
+        ),
+      );
+    });
+
+    test('keeps restrictive file permissions', () async {
+      final destination = File('${directory.path}/private.bin');
+      await destination.writeAsBytes([9, 8, 7]);
+      final chmod = await Process.run('chmod', ['600', destination.path]);
+      expect(chmod.exitCode, 0);
+      await client.getBlobAsFileStreaming(
+        blobId: 'blob',
+        destination: destination,
+      );
+      expect(await destination.readAsBytes(), [1, 2, 3]);
+      expect((await destination.stat()).modeString(), 'rw-------');
+      expect(await directory.list().length, 1);
+    }, testOn: '!windows');
+
+    test('writes through a symlink to its target', () async {
+      final target = File('${directory.path}/target.bin');
+      await target.writeAsBytes([9, 8, 7]);
+      final link = await Link('${directory.path}/link.bin').create(target.path);
+      await client.getBlobAsFileStreaming(
+        blobId: 'blob',
+        destination: File(link.path),
+      );
+      expect(await FileSystemEntity.isLink(link.path), isTrue);
+      expect(await target.readAsBytes(), [1, 2, 3]);
+      expect(await directory.list().length, 2);
+    }, testOn: '!windows');
+  });
+
   test(
     'failed streaming leaves the old destination intact and removes partial files',
     () async {

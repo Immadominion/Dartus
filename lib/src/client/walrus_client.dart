@@ -320,8 +320,10 @@ class WalrusClient {
   ///
   /// This method always reads from the aggregator and bypasses cache reads and
   /// writes to keep memory bounded. Use [getBlobAsFile] for cached downloads.
-  /// The destination is replaced only after the complete download succeeds;
+  /// The destination is written only after the complete download succeeds;
   /// failed downloads discard the temporary file and preserve an existing file.
+  /// A new destination is moved into place. An existing file or symlink is
+  /// overwritten in place, keeping its permissions and link target.
   Future<void> getBlobAsFileStreaming({
     required String blobId,
     required File destination,
@@ -496,7 +498,22 @@ class WalrusClient {
       } finally {
         await file.close();
       }
-      await partial.rename(destination.path);
+      final existing = await FileSystemEntity.type(
+        destination.path,
+        followLinks: false,
+      );
+      if (existing == FileSystemEntityType.notFound) {
+        await partial.rename(destination.path);
+      } else {
+        // Renaming would replace an existing file's permissions and a
+        // symlink itself. Write through instead, after the network succeeds.
+        final sink = destination.openWrite();
+        try {
+          await sink.addStream(partial.openRead());
+        } finally {
+          await sink.close();
+        }
+      }
       return byteCount;
     } finally {
       try {
