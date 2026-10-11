@@ -503,7 +503,17 @@ class WalrusClient {
         await body.cancel();
       } finally {
         if (stagingDirectory != null) {
-          await stagingDirectory.delete(recursive: true);
+          // Best effort: a cleanup failure must not replace the download's
+          // own error, or turn a completed download into a failure.
+          try {
+            await stagingDirectory.delete(recursive: true);
+          } catch (error, stackTrace) {
+            logError(
+              'Failed to remove staging directory ${stagingDirectory.path}',
+              error: error,
+              stackTrace: stackTrace,
+            );
+          }
         }
       }
     }
