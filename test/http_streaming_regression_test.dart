@@ -218,6 +218,39 @@ void main() {
   });
 
   test(
+    'staging cleanup failure does not replace the download error',
+    () async {
+      final body = StreamController<List<int>>();
+      useTransport(
+        _ResponseClient((_) async => http.StreamedResponse(body.stream, 200)),
+        timeout: const Duration(seconds: 5),
+      );
+      final result = client
+          .getBlobAsFileStreaming(
+            blobId: 'blob',
+            destination: File('${directory.path}/out.bin'),
+          )
+          .then<Object?>((_) => null, onError: (Object error) => error);
+      body.add([1, 2, 3]);
+      while (!directory.listSync().any(
+        (entry) => entry.path.contains('.dartus-download-'),
+      )) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      // A non-writable parent makes deleting the staging directory fail.
+      expect((await Process.run('chmod', ['555', directory.path])).exitCode, 0);
+      try {
+        body.addError(const HttpException('interrupted body'));
+        await body.close();
+        expect(await result, isA<HttpException>());
+      } finally {
+        await Process.run('chmod', ['755', directory.path]);
+      }
+    },
+    testOn: '!windows',
+  );
+
+  test(
     'failed streaming leaves the old destination intact and removes partial files',
     () async {
       useTransport(
