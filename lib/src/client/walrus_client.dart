@@ -67,6 +67,10 @@ class WalrusClient {
 
   final Uri publisherBaseUrl;
   final Uri aggregatorBaseUrl;
+
+  /// Maximum wait for response headers and maximum idle time between body
+  /// events. Active streaming transfers can take longer than this duration.
+  /// A stalled transfer throws [TimeoutException] and cancels its body stream.
   final Duration timeout;
   final BlobCache cache;
 
@@ -255,7 +259,7 @@ class WalrusClient {
   /// Downloads a blob by Walrus object identifier without using the cache.
   Future<Uint8List> getBlobByObjectId(String objectId) async {
     logInfo('Fetching blob by object ID $objectId');
-    final uri = _aggregatorUri('v1/blobs/$objectId');
+    final uri = _aggregatorUri('v1/blobs/by-object-id/$objectId');
     final response = await _executor.send(method: 'GET', uri: uri);
     final bytes = await _readBinaryResponse(
       response,
@@ -312,38 +316,26 @@ class WalrusClient {
     );
   }
 
-  /// Streams a blob to [destination] and caches the final bytes.
+  /// Streams a blob to [destination] without loading it into the byte cache.
+  ///
+  /// This method always reads from the aggregator and bypasses cache reads and
+  /// writes to keep memory bounded. Use [getBlobAsFile] for cached downloads.
+  /// The destination is replaced only after the complete download succeeds;
+  /// failed downloads discard the temporary file and preserve an existing file.
   Future<void> getBlobAsFileStreaming({
     required String blobId,
     required File destination,
   }) async {
-    final cached = await cache.get(blobId);
-    if (cached != null) {
-      logInfo('Cache hit for $blobId; writing to ${destination.path}');
-      await _writeBytesToFile(destination, cached);
-      return;
-    }
-    logInfo('Cache miss for $blobId; streaming to ${destination.path}');
+    logInfo('Streaming $blobId to ${destination.path} without byte caching');
 
     final uri = _aggregatorUri('v1/blobs/$blobId');
     final response = await _executor.send(method: 'GET', uri: uri);
-    final bytes = await _readStreamingResponse(
+    final byteCount = await _readStreamingResponse(
       response,
       destination: destination,
       context: 'Error retrieving blob as file by blob ID: $blobId',
     );
-    try {
-      await cache.put(blobId, bytes);
-    } catch (error, stackTrace) {
-      logError(
-        'Failed to cache blob $blobId',
-        error: error,
-        stackTrace: stackTrace,
-      );
-    }
-    logInfo(
-      'Blob $blobId streamed to ${destination.path} (${bytes.length} bytes)',
-    );
+    logInfo('Blob $blobId streamed to ${destination.path} ($byteCount bytes)');
   }
 
   /// Issues a `HEAD` request for [blobId] and returns the response headers.
@@ -447,33 +439,74 @@ class WalrusClient {
     return data;
   }
 
-  Future<Uint8List> _readStreamingResponse(
+  Future<int> _readStreamingResponse(
     http.StreamedResponse response, {
     required File destination,
     required String context,
   }) async {
-    final builder = BytesBuilder(copy: false);
-
     if (!_isSuccessStatus(response.statusCode)) {
-      final body = await response.stream.toBytes();
+      // Limit diagnostic buffering too: error bodies can also be large.
+      final builder = BytesBuilder(copy: false);
+      const maxErrorBytes = 64 * 1024;
+      await for (final chunk in response.stream) {
+        final remaining = maxErrorBytes - builder.length;
+        builder.add(
+          chunk.length <= remaining ? chunk : chunk.sublist(0, remaining),
+        );
+        if (builder.length == maxErrorBytes) break;
+      }
       throw _buildErrorFromResponse(
         statusCode: response.statusCode,
         context: context,
-        bodyBytes: body,
+        bodyBytes: builder.takeBytes(),
         headers: response.headers,
         reasonPhrase: response.reasonPhrase,
       );
     }
 
-    await destination.parent.create(recursive: true);
-    final sink = destination.openWrite();
-    await response.stream.forEach((chunk) {
-      sink.add(chunk);
-      builder.add(chunk);
-    });
-    await sink.close();
-
-    return builder.takeBytes();
+    Directory? stagingDirectory;
+    // Own the subscription before opening the file, so even an asynchronous
+    // open failure cancels the body. StreamIterator pauses between chunks.
+    final body = StreamIterator<List<int>>(response.stream);
+    final firstChunk = body.moveNext();
+    // Observe an early body failure while filesystem setup is pending. Awaiting
+    // firstChunk below still propagates it; this prevents an unhandled error.
+    unawaited(
+      firstChunk.then<void>((_) {}, onError: (Object _, StackTrace _) {}),
+    );
+    try {
+      await destination.parent.create(recursive: true);
+      stagingDirectory = await destination.parent.createTemp(
+        '.dartus-download-',
+      );
+      final partial = File(
+        '${stagingDirectory.path}${Platform.pathSeparator}blob',
+      );
+      final file = await partial.open(mode: FileMode.write);
+      var byteCount = 0;
+      try {
+        var hasNext = await firstChunk;
+        while (hasNext) {
+          final chunk = body.current;
+          await file.writeFrom(chunk);
+          byteCount += chunk.length;
+          hasNext = await body.moveNext();
+        }
+        await file.flush();
+      } finally {
+        await file.close();
+      }
+      await partial.rename(destination.path);
+      return byteCount;
+    } finally {
+      try {
+        await body.cancel();
+      } finally {
+        if (stagingDirectory != null) {
+          await stagingDirectory.delete(recursive: true);
+        }
+      }
+    }
   }
 
   Future<Map<String, dynamic>> _parseJsonResponse(

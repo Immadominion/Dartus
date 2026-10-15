@@ -58,6 +58,25 @@ class RequestExecutor {
 
     final response = await _httpClient.send(request).timeout(_timeout);
     _onVerboseLog?.call('← ${response.statusCode} $description');
-    return response;
+    // Headers have their own deadline. Once they arrive, require progress
+    // within the same interval without limiting the total transfer duration.
+    return http.StreamedResponse(
+      response.stream.timeout(
+        _timeout,
+        onTimeout: (sink) {
+          sink.addError(
+            TimeoutException('Response body stalled: $description', _timeout),
+          );
+          sink.close();
+        },
+      ),
+      response.statusCode,
+      contentLength: response.contentLength,
+      request: response.request,
+      headers: response.headers,
+      isRedirect: response.isRedirect,
+      persistentConnection: response.persistentConnection,
+      reasonPhrase: response.reasonPhrase,
+    );
   }
 }

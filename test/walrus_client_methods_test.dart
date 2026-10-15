@@ -518,21 +518,26 @@ void main() {
       expect(await destination.readAsBytes(), equals(blobData));
     });
 
-    test('uses cache when available', () async {
+    test('bypasses byte cache when streaming', () async {
       final blobData = Uint8List.fromList([11, 22, 33]);
       final destination = File('${tempDir.path}/cached-stream.dat');
 
       await client.cache.put('cached-stream-blob', blobData);
+      final freshData = Uint8List.fromList([44, 55, 66]);
+      server.handleNext((request) {
+        return MockResponse(200, '')..binaryData = freshData;
+      });
 
       await client.getBlobAsFileStreaming(
         blobId: 'cached-stream-blob',
         destination: destination,
       );
 
-      expect(await destination.readAsBytes(), equals(blobData));
+      expect(await destination.readAsBytes(), equals(freshData));
+      expect(await client.cache.get('cached-stream-blob'), equals(blobData));
     });
 
-    test('caches blob after streaming download', () async {
+    test('does not fill byte cache after streaming download', () async {
       final blobData = Uint8List.fromList([100, 101, 102]);
       final destination = File('${tempDir.path}/cache-after-stream.dat');
 
@@ -546,7 +551,7 @@ void main() {
       );
 
       final cached = await client.cache.get('to-cache-blob');
-      expect(cached, equals(blobData));
+      expect(cached, isNull);
     });
   });
 
@@ -578,7 +583,7 @@ void main() {
       final blobData = Uint8List.fromList([1, 2, 3, 4, 5]);
 
       server.handleNext((request) {
-        expect(request.uri.path, equals('/v1/blobs/0x12345'));
+        expect(request.uri.path, equals('/v1/blobs/by-object-id/0x12345'));
         return MockResponse(200, '')..binaryData = blobData;
       });
 
@@ -600,6 +605,37 @@ void main() {
       // Should get server data, not cached data
       expect(result, equals(serverData));
     });
+
+    test(
+      'keeps blob and object routes distinct under an aggregator base path',
+      () async {
+        await client.close();
+        client = WalrusClient(
+          publisherBaseUrl: Uri.parse('http://localhost:${server.port}'),
+          aggregatorBaseUrl: Uri.parse('http://localhost:${server.port}/api'),
+          cacheDirectory: tempDir,
+        );
+        final requestedPaths = <String>[];
+        final blobData = Uint8List.fromList([1, 2, 3]);
+        final objectData = Uint8List.fromList([4, 5, 6]);
+
+        server.handleNext((request) {
+          requestedPaths.add(request.uri.path);
+          return MockResponse(200, '')..binaryData = blobData;
+        });
+        server.handleNext((request) {
+          requestedPaths.add(request.uri.path);
+          return MockResponse(200, '')..binaryData = objectData;
+        });
+
+        expect(await client.getBlob('blob-id'), equals(blobData));
+        expect(await client.getBlobByObjectId('0x12345'), equals(objectData));
+        expect(requestedPaths, [
+          '/api/v1/blobs/blob-id',
+          '/api/v1/blobs/by-object-id/0x12345',
+        ]);
+      },
+    );
   });
 }
 
