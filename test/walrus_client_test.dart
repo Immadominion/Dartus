@@ -1,96 +1,74 @@
+@TestOn('vm')
+@Tags(['unit'])
 library;
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dartus/src/client/walrus_client.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:test/test.dart';
-
-import 'test_config.dart';
 
 void main() {
   late WalrusClient client;
-  File? downloadFile;
+  late MockClient transport;
+  late Directory temp;
+  late File source;
+  late List<String> requests;
+  final bytes = Uint8List.fromList(utf8.encode('Dartus local file fixture\n'));
 
   setUp(() async {
+    temp = await Directory.systemTemp.createTemp('dartus-file-test-');
+    source = await File('${temp.path}/source').writeAsBytes(bytes);
+    requests = [];
+    transport = MockClient((request) async {
+      requests.add(request.method);
+      if (request.method == 'PUT') {
+        expect(request.url.path, '/v1/blobs');
+        expect(request.bodyBytes, bytes);
+        return http.Response(
+          jsonEncode({
+            'newlyCreated': {
+              'blobObject': {'blobId': 'fixture-blob'},
+            },
+          }),
+          200,
+        );
+      }
+      expect(request.url.path, '/v1/blobs/fixture-blob');
+      return http.Response.bytes(bytes, 200);
+    });
     client = WalrusClient(
-      publisherBaseUrl: TestConfig.mockPublisherUri,
-      aggregatorBaseUrl: TestConfig.mockAggregatorUri,
-      timeout: const Duration(seconds: 20),
+      publisherBaseUrl: Uri.parse('https://publisher.invalid'),
+      aggregatorBaseUrl: Uri.parse('https://aggregator.invalid'),
+      httpClient: transport,
     );
-
-    final file = await TestConfig.prepareTestFile();
-    expect(await file.exists(), isTrue);
   });
 
   tearDown(() async {
-    if (downloadFile != null && await downloadFile!.exists()) {
-      await downloadFile!.delete();
-    }
-    await TestConfig.cleanup();
     await client.close();
+    transport.close();
+    await temp.delete(recursive: true);
   });
 
-  test(
-    'uploads a file and fetches by blob id',
-    () async {
-      final response = await client.putBlobFromFile(file: TestConfig.testFile);
-      expect(response, isNotEmpty);
+  test('uploads a local file and fetches the exact bytes by blob id', () async {
+    final response = await client.putBlobFromFile(file: source);
+    final created = response['newlyCreated'] as Map<String, dynamic>;
+    final object = created['blobObject'] as Map<String, dynamic>;
+    expect(object['blobId'], 'fixture-blob');
+    expect(await client.getBlob(object['blobId'] as String), bytes);
+    expect(requests, ['PUT', 'GET']);
+  });
 
-      final blobId = _findBlobId(response);
-      expect(blobId, isNotNull, reason: 'Response should contain a blobId');
-
-      // Use getBlob (by blob ID), not getBlobByObjectId
-      final data = await client.getBlob(blobId!);
-      expect(data, isA<Uint8List>());
-      expect(data, isNotEmpty);
-      // Verify the content matches what we uploaded
-      expect(data, equals(TestConfig.testBlobData));
-    },
-    timeout: const Timeout(Duration(minutes: 3)),
-  );
-
-  test('downloads a file to disk', () async {
-    final destination = File(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}walrus-download-${DateTime.now().microsecondsSinceEpoch}.data',
-    );
-    downloadFile = destination;
-
-    if (await destination.exists()) {
-      await destination.delete();
-    }
-
+  test('downloads exact bytes to disk', () async {
+    final destination = File('${temp.path}/download');
     await client.getBlobAsFile(
-      blobId: TestConfig.testBlobId,
+      blobId: 'fixture-blob',
       destination: destination,
     );
-
-    expect(await destination.exists(), isTrue);
-    expect(await destination.length(), greaterThan(0));
-  }, timeout: const Timeout(Duration(minutes: 3)));
-}
-
-String? _findBlobId(dynamic json) {
-  if (json is Map<String, dynamic>) {
-    for (final entry in json.entries) {
-      if (entry.key == 'blobId') {
-        final value = entry.value;
-        if (value is String && value.isNotEmpty) {
-          return value;
-        }
-      }
-      final nested = _findBlobId(entry.value);
-      if (nested != null) {
-        return nested;
-      }
-    }
-  } else if (json is Iterable) {
-    for (final element in json) {
-      final nested = _findBlobId(element);
-      if (nested != null) {
-        return nested;
-      }
-    }
-  }
-  return null;
+    expect(await destination.readAsBytes(), bytes);
+    expect(requests, ['GET']);
+  });
 }

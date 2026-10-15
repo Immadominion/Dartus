@@ -1,30 +1,17 @@
-# Dartus SDK Test Configuration
-# See https://github.com/dart-lang/test/blob/master/pkgs/test/doc/configuration.md
-#
-# IMPORTANT: Use `flutter test` to run the full suite (473+ tests).
-# Running `dart test` works for Phase 1 (HTTP) tests but will fail on
-# 5 Phase 2/3 test files that import `package:sui` (which transitively
-# depends on `dart:ui`). This is expected behaviour, not a bug.
-#
-# Failing with `dart test` (use `flutter test` instead):
-#   - read_committee_test.dart
-#   - object_data_loader_test.dart
-#   - epoch_state_test.dart
-#   - wal_exchange_test.dart
-#   - blob_attributes_test.dart
+# `flutter test` discovers only test/ and is deterministic/offline.
+# Opt-in live checks are kept in live_test/ and require explicit configuration.
+# Browser runtime: flutter test --platform chrome test/browser/http_browser_test.dart
 
-# Define tags for categorizing tests
 tags:
   unit:
-    description: "Fast unit tests with mocked dependencies"
+    description: "Deterministic tests with local fixtures or mocked dependencies"
   integration:
-    description: "Tests that hit live network endpoints (flaky)"
+    description: "Explicitly selected live checks under live_test/"
+  live-write:
+    description: "Live writes requiring DARTUS_RUN_LIVE_WRITES=true"
   slow:
     description: "Tests that may take longer to complete"
 
-# Default timeout for all tests (30 seconds)
 timeout: 30s
-
-# Platform configuration
 platforms:
   - vm
