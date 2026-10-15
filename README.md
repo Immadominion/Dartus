@@ -79,7 +79,7 @@ The exact functions live in [tool/quickstart_http.dart](tool/quickstart_http.dar
 
 - `getBlob(blobId)` and `getBlobAsFile(...)` use the byte cache: files on native, memory in the browser. Cache capacity counts entries, not bytes.
 - `getBlobByObjectId(objectId)` downloads through `/v1/blobs/by-object-id/<objectId>`.
-- `getBlobAsFileStreaming(...)` always reads from the aggregator and bypasses cache reads and writes. It writes chunks to a temporary file with backpressure, replaces the destination only on success, and removes partial output on failure.
+- `getBlobAsFileStreaming(...)` always reads from the aggregator and bypasses cache reads and writes. It writes chunks to a temporary file with backpressure, writes the destination only on success (overwriting an existing file in place to keep its permissions and symlink target), and removes partial output on failure.
 - `timeout` defaults to 30 seconds: one deadline for response headers, then an inactivity timeout between response-body events. A progressing transfer can take longer than 30 seconds overall. A stalled body raises `TimeoutException`; an HTTP error response raises `WalrusApiError` after its body is read. The headers deadline alone does not abort an underlying request.
 - `BlobCache.cleanup()` clears stored data and permits reuse. `dispose()` waits for pending cache work, removes temporary storage, and rejects later operations. Explicitly supplied cache directories are kept on disposal.
 

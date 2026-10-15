@@ -32,7 +32,7 @@ Do not place private publisher credentials in a browser bundle. An injected HTTP
 - Native cache filenames are SHA-256 hashes **of blob IDs**. This prevents blob IDs becoming file paths, but is not content verification or encryption. Hashes are deterministic, not secret.
 - Cache data is plaintext. Use a directory accessible only to the intended OS user for sensitive application data. Caller-provided output paths and cache directories are trusted inputs; this is not a filesystem sandbox.
 - `cacheMaxSize` limits entries, **not total bytes**. A single blob may still be large. Byte-oriented downloads retain the complete payload in memory.
-- `getBlobAsFileStreaming` bypasses the byte cache and writes to a temporary file, replacing the destination after success. Failed downloads discard partial output. This limits application buffering but does not impose a maximum download size or disk quota.
+- `getBlobAsFileStreaming` bypasses the byte cache and writes to a temporary file. Only after success is a new destination moved into place, or an existing file or symlink overwritten in place so its permissions and link target are kept. Failed downloads discard partial output and leave an existing destination unchanged; a failure while copying into an existing destination can still leave it partially written. This limits application buffering but does not impose a maximum download size or disk quota.
 - Cache operations are serialized within one instance. Do not share a cache directory between independent instances. Temporary directories are removed on disposal; explicitly supplied directories remain.
 
 ## Timeouts
