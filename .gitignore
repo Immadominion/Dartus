@@ -58,3 +58,6 @@ doc/api/
 # Environment
 .env
 .env.local
+
+# Rust build output (build locally with native/build.sh)
+native/walrus_ffi/target/
