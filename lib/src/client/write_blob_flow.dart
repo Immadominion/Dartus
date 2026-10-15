@@ -16,7 +16,7 @@ library;
 
 import 'dart:typed_data';
 
-import 'package:sui/builder/transaction.dart';
+import 'package:sui/sui.dart';
 
 import '../chain/system_state_reader.dart';
 import '../contracts/transaction_builder.dart';
@@ -26,6 +26,7 @@ import '../models/protocol_types.dart';
 import '../models/storage_node_types.dart';
 import '../upload_relay/upload_relay_client.dart';
 import '../utils/encoding_utils.dart';
+import '../utils/wal_coin_pagination.dart';
 
 /// Callback type for direct-mode sliver writing.
 ///
@@ -161,7 +162,7 @@ class WriteBlobFlow {
   final SystemStateReader? _stateReader;
 
   // Sui RPC client for auto-resolving WAL coins.
-  final dynamic _suiClient; // SuiClient (avoids tight coupling)
+  final SuiClient? _suiClient;
 
   // State
   _FlowStep _step = _FlowStep.initial;
@@ -182,7 +183,7 @@ class WriteBlobFlow {
     CommitteeInfo? committee,
     dynamic directClient,
     SystemStateReader? stateReader,
-    dynamic suiClient,
+    SuiClient? suiClient,
   }) : _blob = blob,
        _txBuilder = txBuilder,
        _relayClient = relayClient,
@@ -326,16 +327,11 @@ class WriteBlobFlow {
         storageCost != null &&
         writeCost != null) {
       final totalWalNeeded = storageCost + writeCost;
-      final coins = await _suiClient.getCoins(options.owner, coinType: walType);
-      final coinList = coins.data as List?;
-      if (coinList != null) {
-        for (final coin in coinList) {
-          final balance =
-              BigInt.tryParse(coin.balance as String) ?? BigInt.zero;
-          if (balance >= totalWalNeeded) {
-            walCoinObjectId = coin.coinObjectId as String?;
-            break;
-          }
+      await for (final coin in walCoins(_suiClient, options.owner, walType)) {
+        final balance = BigInt.tryParse(coin.balance) ?? BigInt.zero;
+        if (balance >= totalWalNeeded) {
+          walCoinObjectId = coin.coinObjectId;
+          break;
         }
       }
     }
@@ -399,7 +395,7 @@ class WriteBlobFlow {
       // We must wait for the register transaction to be indexed so the relay
       // can verify the on-chain registration and payment.
       // Mirrors TS SDK's `client.waitForTransaction({ digest })`.
-      await _suiClient.waitForTransaction(options.digest);
+      await _suiClient!.waitForTransaction(options.digest);
 
       final relay = _relayClient;
       final result = await relay.writeBlob(

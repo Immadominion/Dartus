@@ -46,6 +46,7 @@ import '../utils/encoding_utils.dart';
 import '../utils/quilts.dart';
 import '../utils/randomness.dart';
 import '../utils/retry.dart';
+import '../utils/wal_coin_pagination.dart';
 import 'write_blob_flow.dart';
 import 'write_files_flow.dart';
 
@@ -1865,45 +1866,34 @@ class WalrusDirectClient {
   /// Find a WAL coin with sufficient balance for the given amount.
   ///
   /// Returns the coin object ID, or null if no coin has enough balance.
-  /// If [merge] is true, will merge coins to create one with enough.
+  /// If [merge] is true and the combined balance is sufficient, returns the
+  /// largest coin as a merge candidate. This method does not sign or merge;
+  /// call [mergeWalCoins] before using a candidate with insufficient balance.
   Future<String?> findWalCoin(
     String ownerAddress,
     BigInt requiredAmount, {
     bool merge = false,
   }) async {
     final walType = await getWalType();
-    final coins = await suiClient.getCoins(ownerAddress, coinType: walType);
+    var totalBalance = BigInt.zero;
+    CoinStruct? largestCoin;
+    var largestBalance = BigInt.zero;
 
-    if (coins.data.isEmpty) return null;
-
-    // Try to find a single coin with enough balance.
-    for (final coin in coins.data) {
+    // Stop as soon as one coin suffices; otherwise search the full balance.
+    await for (final coin in walCoins(suiClient, ownerAddress, walType)) {
       final balance = BigInt.tryParse(coin.balance) ?? BigInt.zero;
       if (balance >= requiredAmount) {
         return coin.coinObjectId;
       }
+      totalBalance += balance;
+      if (largestCoin == null || balance > largestBalance) {
+        largestCoin = coin;
+        largestBalance = balance;
+      }
     }
 
-    // If merge requested and we have multiple coins, check combined balance.
-    if (merge && coins.data.isNotEmpty) {
-      // Sum all coin balances to check if combined amount is sufficient.
-      var totalBalance = BigInt.zero;
-      for (final coin in coins.data) {
-        totalBalance += BigInt.tryParse(coin.balance) ?? BigInt.zero;
-      }
-
-      if (totalBalance < requiredAmount) {
-        // Combined balance insufficient even after merging.
-        return null;
-      }
-
-      // Return the largest coin — caller should merge before using.
-      coins.data.sort((a, b) {
-        final balA = BigInt.tryParse(a.balance) ?? BigInt.zero;
-        final balB = BigInt.tryParse(b.balance) ?? BigInt.zero;
-        return balB.compareTo(balA);
-      });
-      return coins.data.first.coinObjectId;
+    if (merge && totalBalance >= requiredAmount) {
+      return largestCoin?.coinObjectId;
     }
 
     return null;
@@ -1915,9 +1905,9 @@ class WalrusDirectClient {
   /// Useful when no single coin has enough balance.
   Future<String> mergeWalCoins(String ownerAddress, SuiAccount signer) async {
     final walType = await getWalType();
-    final coins = await suiClient.getCoins(ownerAddress, coinType: walType);
+    final coins = await walCoins(suiClient, ownerAddress, walType).toList();
 
-    if (coins.data.isEmpty) {
+    if (coins.isEmpty) {
       throw InsufficientWalBalanceError(
         ownerAddress: ownerAddress,
         requiredAmount: BigInt.zero,
@@ -1925,16 +1915,16 @@ class WalrusDirectClient {
       );
     }
 
-    if (coins.data.length == 1) {
-      return coins.data.first.coinObjectId;
+    if (coins.length == 1) {
+      return coins.first.coinObjectId;
     }
 
     // Merge all coins into the first one.
     final tx = Transaction();
     tx.setSender(ownerAddress);
 
-    final destination = tx.object(coins.data.first.coinObjectId);
-    final sources = coins.data
+    final destination = tx.object(coins.first.coinObjectId);
+    final sources = coins
         .skip(1)
         .map((c) => tx.object(c.coinObjectId))
         .toList();
@@ -1943,7 +1933,7 @@ class WalrusDirectClient {
 
     await suiClient.signAndExecuteTransactionBlock(signer, tx);
 
-    return coins.data.first.coinObjectId;
+    return coins.first.coinObjectId;
   }
 
   // -------------------------------------------------------------------------

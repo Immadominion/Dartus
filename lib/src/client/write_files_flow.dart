@@ -14,7 +14,7 @@ library;
 
 import 'dart:typed_data';
 
-import 'package:sui/builder/transaction.dart';
+import 'package:sui/sui.dart';
 
 import '../chain/system_state_reader.dart';
 import '../contracts/transaction_builder.dart';
@@ -26,6 +26,7 @@ import '../models/storage_node_types.dart';
 import '../upload_relay/upload_relay_client.dart';
 import '../utils/encoding_utils.dart';
 import '../utils/quilts.dart';
+import '../utils/wal_coin_pagination.dart';
 import 'write_blob_flow.dart';
 
 /// Result for a single file in a [WriteFilesFlow].
@@ -142,7 +143,7 @@ class WriteFilesFlow {
   final SystemStateReader? _stateReader;
 
   // Sui RPC client for auto-resolving WAL coins.
-  final dynamic _suiClient;
+  final SuiClient? _suiClient;
 
   // State
   _WriteFilesFlowStep _step = _WriteFilesFlowStep.initial;
@@ -163,7 +164,7 @@ class WriteFilesFlow {
     CommitteeInfo? committee,
     dynamic directClient,
     SystemStateReader? stateReader,
-    dynamic suiClient,
+    SuiClient? suiClient,
   }) : _files = files,
        _txBuilder = txBuilder,
        _relayClient = relayClient,
@@ -286,16 +287,11 @@ class WriteFilesFlow {
         storageCost != null &&
         writeCost != null) {
       final totalWalNeeded = storageCost + writeCost;
-      final coins = await _suiClient.getCoins(options.owner, coinType: walType);
-      final coinList = coins.data as List?;
-      if (coinList != null) {
-        for (final coin in coinList) {
-          final balance =
-              BigInt.tryParse(coin.balance as String) ?? BigInt.zero;
-          if (balance >= totalWalNeeded) {
-            walCoinObjectId = coin.coinObjectId as String?;
-            break;
-          }
+      await for (final coin in walCoins(_suiClient, options.owner, walType)) {
+        final balance = BigInt.tryParse(coin.balance) ?? BigInt.zero;
+        if (balance >= totalWalNeeded) {
+          walCoinObjectId = coin.coinObjectId;
+          break;
         }
       }
     }
@@ -350,7 +346,7 @@ class WriteFilesFlow {
     if (_relayClient != null) {
       // Wait for register tx to be indexed before contacting relay.
       // Mirrors TS SDK's waitForTransaction before writeBlobToUploadRelay.
-      await _suiClient.waitForTransaction(options.digest);
+      await _suiClient!.waitForTransaction(options.digest);
 
       final result = await _relayClient.writeBlob(
         blobId: metadata.blobId,
