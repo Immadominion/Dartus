@@ -318,6 +318,10 @@ class WalrusClient {
 
   /// Streams a blob to [destination] without loading it into the byte cache.
   ///
+  /// Output is staged in a hidden `.dartus-download-*` directory beside
+  /// [destination]. Staging left by an interrupted process is removed by a
+  /// later download into the same directory once untouched for 24 hours.
+  ///
   /// This method always reads from the aggregator and bypasses cache reads and
   /// writes to keep memory bounded. Use [getBlobAsFile] for cached downloads.
   /// The destination is replaced only after the complete download succeeds;
@@ -476,9 +480,8 @@ class WalrusClient {
     );
     try {
       await destination.parent.create(recursive: true);
-      stagingDirectory = await destination.parent.createTemp(
-        '.dartus-download-',
-      );
+      await _removeStaleStagingDirectories(destination.parent);
+      stagingDirectory = await destination.parent.createTemp(_stagingPrefix);
       final partial = File(
         '${stagingDirectory.path}${Platform.pathSeparator}blob',
       );
@@ -506,6 +509,49 @@ class WalrusClient {
           await stagingDirectory.delete(recursive: true);
         }
       }
+    }
+  }
+
+  static const _stagingPrefix = '.dartus-download-';
+
+  /// Staging output untouched for this long belongs to a download that was
+  /// interrupted without cleanup. Active downloads write at least once per
+  /// [timeout], or they fail with [TimeoutException].
+  static const _staleStagingAge = Duration(hours: 24);
+
+  /// Best effort: removes staging directories in [parent] left behind when a
+  /// process ended mid-download, so they do not accumulate.
+  Future<void> _removeStaleStagingDirectories(Directory parent) async {
+    final cutoff = DateTime.now().subtract(_staleStagingAge);
+    try {
+      await for (final entity in parent.list(followLinks: false)) {
+        if (entity is! Directory) continue;
+        final name = entity.path.split(Platform.pathSeparator).last;
+        if (!name.startsWith(_stagingPrefix)) continue;
+        try {
+          // The partial file is created right after its directory and
+          // updated on every chunk, so it carries the last activity time.
+          final partial = File('${entity.path}${Platform.pathSeparator}blob');
+          final lastModified = await partial.exists()
+              ? await partial.lastModified()
+              : (await entity.stat()).modified;
+          if (lastModified.isAfter(cutoff)) continue;
+          await entity.delete(recursive: true);
+          logInfo('Removed stale download staging directory ${entity.path}');
+        } catch (error, stackTrace) {
+          logError(
+            'Failed to remove stale staging directory ${entity.path}',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+      }
+    } catch (error, stackTrace) {
+      logError(
+        'Failed to scan ${parent.path} for stale staging directories',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 

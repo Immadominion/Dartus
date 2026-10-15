@@ -34,6 +34,7 @@ Do not place private publisher credentials in a browser bundle. An injected HTTP
 - `cacheMaxSize` limits entries, **not total bytes**. A single blob may still be large. Byte-oriented downloads retain the complete payload in memory.
 - `getBlobAsFileStreaming` bypasses the byte cache and writes to a temporary file, replacing the destination after success. Failed downloads discard partial output. This limits application buffering but does not impose a maximum download size or disk quota.
 - Cache operations are serialized within one instance. Do not share a cache directory between independent instances. Temporary directories are removed on disposal; explicitly supplied directories remain.
+- If a process ends mid-download, its hidden `.dartus-download-*` staging directory and partial file remain beside the destination. A later streaming download into the same directory removes staging untouched for 24 hours; until then, partial output stays on disk with default permissions.
 
 ## Timeouts
 
