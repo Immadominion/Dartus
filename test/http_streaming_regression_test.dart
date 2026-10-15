@@ -244,4 +244,41 @@ void main() {
       expect(await client.cache.get('broken'), isNull);
     },
   );
+
+  test(
+    'removes only stale staging directories left by interrupted runs',
+    () async {
+      useTransport(
+        _ResponseClient(
+          (_) async => http.StreamedResponse(Stream.value([1, 2, 3]), 200),
+        ),
+      );
+      Future<Directory> staging(String name, {required Duration age}) async {
+        final dir = await Directory('${directory.path}/$name').create();
+        final partial = File('${dir.path}/blob');
+        await partial.writeAsBytes([7]);
+        await partial.setLastModified(DateTime.now().subtract(age));
+        return dir;
+      }
+
+      final stale = await staging('.dartus-download-stale', age: _day * 2);
+      final active = await staging(
+        '.dartus-download-active',
+        age: Duration.zero,
+      );
+      final unrelated = await staging('keep-me', age: _day * 2);
+
+      await client.getBlobAsFileStreaming(
+        blobId: 'blob',
+        destination: File('${directory.path}/out.bin'),
+      );
+
+      expect(await stale.exists(), isFalse);
+      expect(await active.exists(), isTrue);
+      expect(await unrelated.exists(), isTrue);
+      expect(await File('${directory.path}/out.bin').readAsBytes(), [1, 2, 3]);
+    },
+  );
 }
+
+const _day = Duration(hours: 24);
