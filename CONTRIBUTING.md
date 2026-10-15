@@ -2,7 +2,11 @@
 
 Thank you for your interest in contributing to Dartus! This guide covers setup, architecture, and conventions.
 
+Check the [issue tracker](https://github.com/Immadominion/Dartus/issues) for open work before starting, and agree on scope in the issue first.
+
 ## Development Setup
+
+Use Flutter with bundled Dart **>=3.11.0 <4.0.0**. CI uses Flutter **3.44.2**, matching the locally verified toolchain.
 
 ```bash
 # Clone the repository
@@ -10,10 +14,13 @@ git clone https://github.com/Immadominion/Dartus.git
 cd Dartus
 
 # Install dependencies
-dart pub get
+flutter pub get
 
-# Run tests
-dart test
+# Build the native encoder required by the complete suite (requires Rust)
+bash native/build.sh release
+
+# Run the complete deterministic suite
+flutter test --no-pub
 
 # Run the analyzer (strict mode)
 dart analyze --fatal-infos
@@ -22,23 +29,24 @@ dart analyze --fatal-infos
 dart format .
 ```
 
-### Native library (optional)
+### Native library (required for the complete test suite)
 
-Direct mode features require the Rust FFI library. Build it with:
+Native encoding and the complete test suite require the Rust FFI library built for your operating system. Install Rust with Cargo and a native C/C++ toolchain; CI uses Rust **1.95.0**. From the repository root, build with:
 
 ```bash
-cd native && ./build.sh release && cd ..
+bash native/build.sh release
 ```
 
-Without it, tests that require client-side encoding will use the pure-Dart fallback.
+The loader finds the library under `native/walrus_ffi/target/release/`. `WALRUS_FFI_LIB` can select an explicit library path. A macOS `.dylib` cannot satisfy Linux's `.so` requirement; CI builds the Linux library before running the full suite. HTTP-only fixture tests and browser tests do not require the native encoder. An unavailable encoder does not fall back to a protocol-compatible Dart implementation.
 
 ## Architecture
 
 ```
 lib/
-  dartus.dart              # Public barrel file — all exports
+  dartus.dart              # HTTP client and shared public types
+  direct.dart              # Direct client, write flows, native encoding
   src/
-    cache/                 # Disk-based LRU blob cache (SHA-256 filenames)
+    cache/                 # Disk cache on native; memory cache on web
     chain/                 # On-chain readers: SystemStateReader, CommitteeResolver
     client/                # WalrusClient (HTTP), WalrusDirectClient (direct),
                            # WriteBlobFlow, WriteFilesFlow
@@ -46,7 +54,7 @@ lib/
     contracts/             # WalrusTransactionBuilder — Sui Move call construction
     crypto/                # BLS12-381 provider interface + bls_dart adapter
     encoding/              # WalrusBlobEncoder (Rust FFI), BCS parser,
-                           # BlobEncoder (pure Dart fallback)
+                           # encoding abstractions
     errors/                # Typed error hierarchy (18+ classes)
     files/                 # WalrusFile, WalrusBlob, readers (quilt, blob)
     logging/               # Shared log utilities
@@ -60,32 +68,45 @@ lib/
 
 ### Key design patterns
 
-- **Cache-first reads**: `getBlob` and friends always check the disk cache before hitting the network. After a successful fetch, `cache.put()` is called. Maintain this invariant when adding new download methods.
-- **Query builder helper**: Upload methods share `_buildQueryParams` for optional Walrus parameters (`epochs`, `deletable`, `send_object_to`). Extend that helper rather than constructing query strings inline.
-- **Centralized HTTP**: All non-streaming HTTP routes go through `RequestExecutor.executeRequest`. Add shared logging or metrics there.
+- **Cache policy**: `getBlob` and `getBlobAsFile` use the byte cache. `getBlobByObjectId` bypasses it. `getBlobAsFileStreaming` also bypasses cache reads and writes so large files are not accumulated in memory.
+- **Query builder helper**: Upload methods share `_buildQueryParameters` for optional Walrus parameters (`epochs`, `deletable`, `send_object_to`). Extend that helper rather than constructing query strings inline.
+- **Centralized HTTP**: HTTP requests go through `RequestExecutor.send`. Response bodies are consumed by `WalrusClient`.
 - **JWT uniformity**: Auth flows through `setJwtToken` / `clearJwtToken` at the instance level, with method-level overrides. Avoid introducing custom headers.
-- **Error hierarchy**: Errors extend `WalrusClientError`; retryable ones extend `RetryableWalrusClientError`. Add new errors to `lib/src/errors/walrus_errors.dart` and export from `dartus.dart`.
+- **Error hierarchy**: HTTP mode surfaces `WalrusApiError`. Direct mode uses `WalrusClientError` and `RetryableWalrusClientError`; its protocol state can be refreshed with `WalrusDirectClient.reset()`.
 
 ## Running Tests
 
 ```bash
-# All tests (unit + integration)
-dart test
-
-# Specific test file
-dart test test/blob_cache_test.dart
+# Specific local test file
+flutter test test/blob_cache_test.dart
 
 # With verbose output
-dart test --reporter expanded
+flutter test test/blob_cache_test.dart --reporter expanded
 
-# Only unit tests (fast, no network)
-dart test --tags unit
+# Full deterministic suite (no external network requests or uploads)
+flutter test --no-pub
 
-# Integration tests (requires network, may be slow)
-dart test --tags integration
+# Browser runtime checks (JavaScript, requires Chrome)
+flutter test --no-pub --platform chrome test/browser/http_browser_test.dart test/cache_regression_test.dart
 ```
 
-**Live endpoint tests** use `test/test_config.dart` for URLs and known blob IDs. Expect network latency and keep credentials current.
+Use Flutter for the full suite: direct-mode dependencies require `dart:ui`. `dart test` alone is not the full validation command.
+
+**Network boundary:** default tests live in `test/` and use fixtures, injected clients, or loopback servers. `test/flutter_test_config.dart` blocks external native HTTP requests during `flutter test`. Browser tests use mocked HTTP. Test discovery, rather than `--tags unit`, selects the complete deterministic suite.
+
+Opt-in live tests live separately in `live_test/`. A read check requires `DARTUS_LIVE_AGGREGATOR`, `DARTUS_LIVE_BLOB_ID`, and `DARTUS_LIVE_EXPECTED_TEXT`, then:
+
+```bash
+flutter test --no-pub live_test/http_live_read_test.dart --tags integration
+```
+
+The upload check requires `DARTUS_LIVE_PUBLISHER`, `DARTUS_LIVE_AGGREGATOR`, and explicit `DARTUS_RUN_LIVE_WRITES=true`; it does not need the read fixture's blob ID or expected text. Use an authorized test publisher; it writes a deletable blob for one epoch:
+
+```bash
+flutter test --no-pub live_test/http_live_upload_test.dart --tags live-write
+```
+
+Each live command selects one test and fails on missing configuration or request errors. Neither runs in CI. A passing mock suite is not evidence of a live mainnet roundtrip. Browser verification covers JavaScript, not Wasm or native encoding.
 
 ## Code Style
 
@@ -116,17 +137,19 @@ chore: update bls_dart dependency to published version
 3. Make your changes with tests.
 4. Ensure all checks pass:
    ```bash
-   dart format --set-exit-if-changed .
+   dart format --output=none --set-exit-if-changed lib test live_test tool
    dart analyze --fatal-infos
-   dart test
+   flutter test --no-pub
+   flutter test --no-pub --platform chrome test/browser/http_browser_test.dart test/cache_regression_test.dart
    ```
+   Report exact commands and any failures. Run live tests only when deliberately validating that network behavior.
 5. Commit with clear messages.
 6. Push and create a pull request.
 
 ## Adding New Features
 
 1. **Add the implementation** in the appropriate `lib/src/` directory.
-2. **Export** new public symbols from `lib/dartus.dart`.
+2. **Export** HTTP-safe symbols from `lib/dartus.dart`; put native/direct-mode symbols in `lib/direct.dart`.
 3. **Add tests** under `test/`. Prefer unit tests; use integration tests sparingly.
 4. **Document** with `///` doc comments and update `README.md` if the feature is user-facing.
 5. **Update `CHANGELOG.md`** under the `[Unreleased]` section.
@@ -136,6 +159,8 @@ chore: update bls_dart dependency to published version
 File issues at [github.com/Immadominion/Dartus/issues](https://github.com/Immadominion/Dartus/issues) with:
 
 - Dart/Flutter SDK version
-- Platform (macOS, iOS, Android, Linux, Windows)
+- Platform (macOS, iOS, Android, Linux, Windows, web)
 - Minimal reproduction steps
 - Full error output (stack traces, `dart analyze` output)
+
+Remove credentials and private data from reports. Explain which work you did and credit collaborators or substantial assistance in your PR.

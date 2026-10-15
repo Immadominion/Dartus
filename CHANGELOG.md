@@ -5,6 +5,38 @@ All notable changes to Dartus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `WalrusClient.getBlobByObjectId` now uses the aggregator's
+  `/v1/blobs/by-object-id/{objectId}` route so Sui object IDs are resolved
+  correctly, including when the aggregator URL has a base path.
+- Cache overwrites preserve unrelated entries and refresh recency. Per-instance
+  operation ordering prevents concurrent writes from exceeding capacity or
+  racing cleanup; failed writes preserve the previous complete file.
+- HTTP response bodies now time out after an idle interval, canceling their
+  stream subscription. The existing separate header deadline is retained.
+- Streaming file downloads write chunks with backpressure into a temporary
+  sibling directory, replace the destination only after success, and clean up
+  after stream or filesystem failures. Error diagnostics are capped at 64 KiB.
+- All four automatic WAL coin selection/merge paths follow pagination, ignore
+  duplicate coin IDs, and reject missing or repeated continuation cursors.
+- README examples now use the current imports and named arguments. Security
+  documentation distinguishes source checks from audits and records current
+  direct-mode transport and upload-policy limitations.
+
+### Changed
+
+- `getBlobAsFileStreaming` bypasses both byte-cache reads and writes to avoid
+  buffering entire downloads. Use `getBlobAsFile` when cache reuse is wanted.
+- Declared Dart minimum is now 3.11, matching the existing hosted `bls_dart`
+  dependency. Shortened the package description to satisfy metadata guidance.
+- Default tests are deterministic and block external native HTTP requests;
+  live checks moved to explicitly selected `live_test/` files. Added local
+  regressions, checked documentation examples, Chrome JavaScript runtime tests,
+  and a GitHub Actions workflow for formatting, analysis, native and web tests.
+
 ## [0.3.0] - 2026-06-20
 
 Makes Dartus work on **Flutter Web** in HTTP mode. Contains breaking changes
@@ -173,4 +205,4 @@ for direct-mode and custom-HTTP-client users (see below).
 ### Notes
 
 - Blobs are created as deletable by default; pass `deletable: false` to create permanent blobs
- 
+

@@ -1,237 +1,66 @@
 # Security
 
-This document describes the security measures and testing performed for the Dartus SDK.
+This document describes current source behavior and known limits of Dartus, reviewed on **October 9, 2026**. Local changes may differ from the published package. It is not an independent security audit or certification of mainnet readiness.
 
-## Security Testing Summary
+## Report a vulnerability privately
 
-| Category | Status | Details |
-|----------|--------|---------|
-| Static Analysis | ✔ Pass | `dart analyze --fatal-infos` with strict settings |
-| Type Safety | ✔ Enabled | `strict-casts`, `strict-inference`, `strict-raw-types` |
-| Unit Tests | ✔ 395+ passing | Comprehensive coverage of all components |
-| Integration Tests | ✔ 2 passing | End-to-end testnet verification |
-| Dependency Audit | ✔ Clean | No known vulnerabilities in dependencies |
-| Code Review | ✔ Complete | Manual review of HTTP handling, auth, caching |
+Email the maintainer at **[immadominion@gmail.com](mailto:immadominion@gmail.com)** with a description, affected version or commit, reproduction steps, and likely impact. Omit wallet secrets, real credentials, and other users' private data.
 
----
+Do not put private vulnerability details in a public GitHub issue. GitHub private vulnerability reporting is not enabled for this repository as of the review date. No response-time commitment is claimed here.
 
-## Static Analysis
+## Transport behavior
 
-The SDK uses Dart's recommended lints with additional strict type checking:
+| Path | Current behavior |
+|------|------------------|
+| Default `WalrusClient` over HTTPS | Uses `package:http` with platform certificate validation. `useSecureConnection` is a compatibility no-op, regardless of its value. |
+| Injected `WalrusClient.httpClient` | Uses the supplied client's transport and certificate policy. Dartus cannot establish its safety. |
+| `WalrusDirectClient` storage-node connections | Its shared `HttpClient` accepts invalid certificates through `badCertificateCallback`, leaving these connections vulnerable to interception. |
+| Standalone `StorageNodeClient` / `UploadRelayClient` | Their own default `HttpClient` keeps normal certificate checks. A supplied storage-node client may use a different policy. |
 
-```yaml
-# analysis_options.yaml
-include: package:lints/recommended.yaml
+The SDK accepts HTTP URLs too; certificate validation does not make an HTTP URL encrypted. Use HTTPS for remote services. The HTTP compatibility flag does not change the direct client's insecure certificate behavior.
 
-analyzer:
-  language:
-    strict-casts: true
-    strict-inference: true
-    strict-raw-types: true
-```
+Direct operation also needs further validation of its Sui transport, registration/certification flow, BLS configuration, and encoded metadata. API examples and unit tests do not establish that those paths can safely complete a mainnet upload.
 
-**Result**: `dart analyze --fatal-infos` passes with **0 issues**.
+## Authentication and logs
 
----
+`WalrusClient` holds its default JWT in memory and sends it in the `Authorization: Bearer` header on uploads. A per-call token overrides that default, and `clearJwtToken()` clears the client's default reference. This is not secure erasure of all copies of a token.
 
-## Security Considerations
+Do not place private publisher credentials in a browser bundle. An injected HTTP client, publisher, logging callback, or caller can independently retain request information. SDK logging is off by default; review configured logging and endpoint URLs before enabling verbose output. Avoid embedding secrets in URLs.
 
-### 1. TLS/SSL Configuration
+## Local cache and file downloads
 
-The SDK supports configurable TLS validation:
+- Native cache filenames are SHA-256 hashes **of blob IDs**. This prevents blob IDs becoming file paths, but is not content verification or encryption. Hashes are deterministic, not secret.
+- Cache data is plaintext. Use a directory accessible only to the intended OS user for sensitive application data. Caller-provided output paths and cache directories are trusted inputs; this is not a filesystem sandbox.
+- `cacheMaxSize` limits entries, **not total bytes**. A single blob may still be large. Byte-oriented downloads retain the complete payload in memory.
+- `getBlobAsFileStreaming` bypasses the byte cache and writes to a temporary file, replacing the destination after success. Failed downloads discard partial output. This limits application buffering but does not impose a maximum download size or disk quota.
+- Cache operations are serialized within one instance. Do not share a cache directory between independent instances. Temporary directories are removed on disposal; explicitly supplied directories remain.
 
-```dart
-// Production (recommended): Enforce TLS certificate validation
-WalrusClient(
-  publisherBaseUrl: Uri.parse('https://publisher.walrus.space'),
-  aggregatorBaseUrl: Uri.parse('https://aggregator.walrus.space'),
-  useSecureConnection: true,  // Validates certificates
-);
+## Timeouts
 
-// Development only: Accept any certificate (insecure)
-WalrusClient(
-  publisherBaseUrl: Uri.parse('https://localhost:31415'),
-  aggregatorBaseUrl: Uri.parse('https://localhost:31416'),
-  useSecureConnection: false,  // WARNING: Only for local testing
-);
-```
+For `WalrusClient`, `timeout` applies first to waiting for response headers and then to inactivity between response-body events. A stalled body raises `TimeoutException`, with body subscriptions and partial file output cleaned up. An active transfer can exceed the configured interval in total duration. The headers deadline alone does not abort the underlying request.
 
-**Recommendation**: Always use `useSecureConnection: true` in production.
+This contract applies to the HTTP publisher/aggregator client. It should not be assumed to cover every direct-mode, relay, or Sui operation. A timeout is not a content-size limit or a complete denial-of-service defense.
 
-### 2. JWT Authentication
+## Public storage and deletion
 
-JWT tokens are handled securely:
+Do not treat a blob ID as an access-control secret. Walrus storage is not confidential by default; encrypt sensitive content before upload and manage the keys outside the blob. A publisher or storage endpoint can observe the bytes you send unless your application encrypts them first.
 
-- Tokens stored in memory only (not persisted to disk)
-- Per-request token override supported
-- `clearJwtToken()` method to explicitly remove tokens
-- Tokens sent via `Authorization: Bearer` header (industry standard)
+HTTP upload methods currently default to `deletable: true`, but permit callers to pass `false`. Direct write APIs require an explicit deletion choice and also accept `false`. The SDK therefore **does not enforce a deletable-only policy**. A default value alone does not establish grant compliance.
 
-```dart
-client.setJwtToken('your.jwt.token');
-// ... make requests ...
-client.clearJwtToken();  // Clear when done
-```
+Deletable means the blob can be removed through the relevant protocol operation; it does not automatically schedule deletion or remove copies already downloaded by others. Changing the defaults or enforcing a restriction requires a coordinated behavior and release decision.
 
-### 3. Input Validation
+## What the checks establish
 
-- Blob IDs are validated before HTTP requests
-- File paths are validated for read/write operations
-- Query parameters are properly URL-encoded
-- HTTP responses are validated before processing
-
-### 4. Cache Security
-
-The disk cache uses:
-
-- SHA-256 hashed filenames (no predictable paths)
-- User-controlled cache directory
-- No sensitive data in cache keys
-- Configurable size limits to prevent disk exhaustion
-
-```dart
-WalrusClient(
-  cacheDirectory: Directory('/secure/cache/path'),
-  cacheMaxSize: 100,  // Max 100 cached blobs
-);
-```
-
-### 5. Data Privacy
-
-**ⓘ Important**: All blobs stored on Walrus are **public and discoverable** by anyone with the blob ID.
-
-For sensitive data:
-
-1. Encrypt data before uploading
-2. Use [Seal](https://docs.wal.app/docs/dev-guide/data-security#seal-data-confidentially-and-access-control) for access control
-3. Never store credentials, API keys, or PII as blobs
-
-### 6. Deletable Blobs (Grant Requirement)
-
-Per grant requirements, the SDK defaults `deletable: true` for all uploads:
-
-```dart
-// Default: deletable blob (can be removed before expiration)
-await client.putBlob(data: bytes);  // deletable: true by default
-
-// Explicit permanent blob (cannot be deleted)
-await client.putBlob(data: bytes, deletable: false);
-```
-
----
-
-## Dependency Security
-
-All dependencies are from pub.dev with no known vulnerabilities:
-
-| Dependency | Purpose | Risk |
-|------------|---------|------|
-| `crypto` | SHA-256 hashing | Low (maintained by Dart team) |
-| `http` | HTTP requests | Low (maintained by Dart team) |
-| `ffi` | Rust FFI bindings | Low (maintained by Dart team) |
-| `meta` | Annotations | None |
-| `sui` | Sui blockchain client | Medium (third-party: mofalabs.com) |
-| `bls_dart` | BLS12-381 signatures | Medium (local; uses flutter_rust_bridge + blst) |
-
-Run `dart pub outdated` to check for updates.
-
----
-
-## Threat Model
-
-### In Scope
-
-| Threat | Mitigation |
-|--------|------------|
-| Man-in-the-middle attacks | TLS validation when `useSecureConnection: true` |
-| JWT token leakage | Tokens in memory only, explicit clear method |
-| Cache poisoning | SHA-256 content-addressed cache keys |
-| Path traversal | Input validation on file operations |
-| Denial of service (local) | Configurable cache size limits |
-
-### Out of Scope
-
-| Threat | Reason |
-|--------|--------|
-| Walrus network attacks | Protocol-level security handled by Walrus |
-| Sui blockchain exploits | Not applicable (SDK is read/write only) |
-| Server-side vulnerabilities | SDK is client-side only |
-| Data confidentiality | Walrus is a public storage network |
-
----
-
-## Reporting Vulnerabilities
-
-If you discover a security vulnerability in Dartus:
-
-1. **Do not** open a public GitHub issue
-2. Email: security@[maintainer-domain] (replace with actual contact)
-3. Include:
-   - Description of the vulnerability
-   - Steps to reproduce
-   - Potential impact
-   - Suggested fix (if any)
-
-We aim to respond within 48 hours and will coordinate disclosure.
-
----
-
-## Penetration Testing Notes
-
-### What Was Tested
-
-1. **HTTP Request Handling**
-   - Verified proper URL encoding
-   - Tested malformed response handling
-   - Confirmed timeout behavior
-
-2. **Authentication Flow**
-   - JWT token injection attempts
-   - Token persistence verification
-   - Authorization header correctness
-
-3. **File Operations**
-   - Path traversal attempts
-   - Large file handling
-   - Concurrent access
-
-4. **Error Handling**
-   - Network failure recovery
-   - Invalid input rejection
-   - Resource cleanup on errors
-
-### Automated Testing
+Run from this checkout:
 
 ```bash
-# Static analysis (strict mode)
+flutter test --no-pub
 dart analyze --fatal-infos
-
-# All tests including integration
-dart test
-
-# Format check
-dart format --set-exit-if-changed .
+dart format --output=none --set-exit-if-changed lib test live_test tool
 ```
 
----
+Default tests use injected fixtures or loopback HTTP services. Optional live checks are separate; see [CONTRIBUTING.md](CONTRIBUTING.md). Browser checks cover the HTTP byte API and memory cache in Chrome JavaScript, not direct/FFI operation or WebAssembly.
 
-## Compliance
+Tests establish behavior for their fixtures. Static analysis checks types and lints. `flutter pub outdated` reports available dependency versions; it is **not** a vulnerability audit. These checks do not demonstrate absence of vulnerabilities, full protocol verification, or legal compliance.
 
-- ✔ MIT License (open source)
-- ✔ No telemetry or analytics
-- ✔ No external data collection
-- ✔ GDPR compatible (no personal data stored by SDK)
-- ✔ Deletable blobs by default (per Walrus Foundation grant)
-
----
-
-## Version History
-
-| Version | Security Updates |
-|---------|------------------|
-| 0.2.0 | Added Phase 2/3 security review; updated test counts; FFI safety audit |
-| 0.1.0 | Initial release with security baseline |
-
----
-
-*Last updated: February 2026*
+Earlier versions of this document listed test totals, clean dependency results, penetration testing, and an FFI safety audit without reproducible reports. Those claims are not carried forward as verified security evidence. There is no independently verified security-audit report linked by this document.
