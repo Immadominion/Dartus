@@ -1,0 +1,41 @@
+name: Dartus checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: '3.44.2'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Formatting
+        run: dart format --output=none --set-exit-if-changed lib test live_test tool
+      - name: Static analysis
+        run: dart analyze --fatal-infos
+      - name: Prepare native encoder toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Build native encoder for Linux
+        env:
+          RUSTUP_TOOLCHAIN: '1.95.0'
+        run: |
+          bash native/build.sh release
+          test -f native/walrus_ffi/target/release/libwalrus_ffi.so
+      - name: Deterministic native tests
+        env:
+          WALRUS_FFI_LIB: ${{ github.workspace }}/native/walrus_ffi/target/release/libwalrus_ffi.so
+        run: flutter test --no-pub
+      - name: Browser HTTP and memory-cache runtime tests (JavaScript)
+        env:
+          CHROME_EXECUTABLE: /usr/bin/google-chrome
+        run: flutter test --no-pub --platform chrome test/browser/http_browser_test.dart test/cache_regression_test.dart
