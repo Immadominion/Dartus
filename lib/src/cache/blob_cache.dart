@@ -16,6 +16,8 @@ const bool _hasFileSystem = bool.fromEnvironment('dart.library.io');
 /// unavailable at runtime — the cache transparently falls back to an
 /// in-memory LRU store with the same API. Evicts the least recently accessed
 /// entry when [maxSize] is exceeded.
+/// Operations on one cache instance run in call order, including reads and
+/// cleanup. Sharing a native cache directory between instances is unsupported.
 ///
 /// ## Example
 ///
@@ -75,21 +77,25 @@ class BlobCache {
   /// Web in-memory store of blob ID -> bytes.
   final Map<String, Uint8List> _memory = <String, Uint8List>{};
 
-  final Map<String, DateTime> _accessTimes = <String, DateTime>{};
+  // Dart sets preserve insertion order, avoiding clock-resolution ties in LRU.
+  final Set<String> _accessOrder = <String>{};
+  Future<void> _pending = Future<void>.value();
+  bool _disposed = false;
 
   /// The native cache directory.
   ///
   /// Only available on platforms with a filesystem; throws on the web.
-  Directory get directory => _fileManager!;
+  Directory get directory =>
+      _fileManager ?? (throw UnsupportedError('No cache directory on the web'));
 
   /// Returns cached bytes for [blobId] and refreshes its access time.
-  Future<Uint8List?> get(String blobId) async {
+  Future<Uint8List?> get(String blobId) => _run(() async {
     if (!_hasFileSystem) {
       final data = _memory[blobId];
       if (data == null) {
         return null;
       }
-      _accessTimes[blobId] = DateTime.now();
+      _touch(blobId);
       return Uint8List.fromList(data);
     }
 
@@ -100,84 +106,97 @@ class BlobCache {
 
     try {
       final data = await file.readAsBytes();
-      _accessTimes[blobId] = DateTime.now();
+      _touch(blobId);
       return Uint8List.fromList(data);
     } on FileSystemException {
-      await remove(blobId);
+      await _remove(blobId);
       return null;
     }
-  }
+  });
 
   /// Persists [data] for [blobId], evicting the oldest entry when full.
   ///
   /// Returns the backing [File] on native, or `null` on the web (in-memory).
-  Future<File?> put(String blobId, List<int> data) async {
-    if (maxSize <= 0) {
-      throw StateError('maxSize must be greater than zero');
-    }
-
-    final count = _hasFileSystem ? _cacheIndex.length : _memory.length;
-    if (count >= maxSize) {
-      await _evictOldest();
-    }
-
+  /// Overwrites refresh recency without evicting unrelated entries. Native
+  /// writes replace the previous file only after the new bytes are complete.
+  Future<File?> put(String blobId, List<int> data) => _run(() async {
     if (!_hasFileSystem) {
       _memory[blobId] = Uint8List.fromList(data);
-      _accessTimes[blobId] = DateTime.now();
+      _touch(blobId);
+      await _trimToSize();
       return null;
     }
 
+    // cleanup() removes the directory but leaves this cache reusable.
+    await _fileManager!.create(recursive: true);
     final fileName = sha256Hex(blobId);
     final file = File(
       '${_fileManager!.path}${Platform.pathSeparator}$fileName',
     );
 
+    final pendingFile = File('${file.path}.pending');
     try {
-      await file.writeAsBytes(data, flush: true);
+      await pendingFile.writeAsBytes(data, flush: true);
+      await pendingFile.rename(file.path);
       _cacheIndex[blobId] = file;
-      _accessTimes[blobId] = DateTime.now();
+      _touch(blobId);
+      await _trimToSize();
       return file;
-    } catch (error) {
-      if (file.existsSync()) {
-        await file.delete();
+    } finally {
+      if (await pendingFile.exists()) {
+        await pendingFile.delete();
       }
-      rethrow;
     }
-  }
+  });
 
   /// Removes any stored bytes for [blobId].
-  Future<void> remove(String blobId) async {
-    _accessTimes.remove(blobId);
+  Future<void> remove(String blobId) => _run(() => _remove(blobId));
+
+  Future<void> _remove(String blobId) async {
     if (!_hasFileSystem) {
       _memory.remove(blobId);
-      return;
+    } else {
+      final file = _cacheIndex[blobId];
+      if (file != null && await file.exists()) {
+        await file.delete();
+      }
+      _cacheIndex.remove(blobId);
     }
-    final file = _cacheIndex.remove(blobId);
-    if (file != null && await file.exists()) {
-      await file.delete();
-    }
+    _accessOrder.remove(blobId);
   }
 
   /// Deletes every cached entry and clears in-memory tracking.
-  Future<void> cleanup() async {
-    _accessTimes.clear();
+  /// The cache can be used again after cleanup completes.
+  Future<void> cleanup() => _run(_cleanup);
+
+  Future<void> _cleanup() async {
     if (!_hasFileSystem) {
       _memory.clear();
-      return;
+    } else {
+      final dir = _fileManager;
+      if (dir != null && await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+      _cacheIndex.clear();
     }
-    final dir = _fileManager;
-    if (dir != null && await dir.exists()) {
-      await dir.delete(recursive: true);
-    }
-    _cacheIndex.clear();
+    _accessOrder.clear();
   }
 
   /// Cleans up temporary caches when the cache lifecycle ends.
-  Future<void> dispose() async {
-    if (_cleanupOnDispose) {
-      await cleanup();
+  /// Waits for pending operations. Later operations fail with [StateError].
+  /// Calling dispose more than once is safe. User-provided directories remain.
+  Future<void> dispose() => _enqueue(() async {
+    if (_disposed) {
+      return;
     }
-  }
+    if (_cleanupOnDispose) {
+      await _cleanup();
+    }
+    _memory.clear();
+    _cacheIndex.clear();
+    _accessOrder.clear();
+    _disposed = true;
+  });
 
   static Directory _createTemporaryCacheDir() {
     final tempDir = Directory.systemTemp;
@@ -185,22 +204,29 @@ class BlobCache {
     return cacheDir;
   }
 
-  Future<void> _evictOldest() async {
-    if (_accessTimes.isEmpty) {
-      return;
-    }
+  void _touch(String blobId) {
+    _accessOrder.remove(blobId);
+    _accessOrder.add(blobId);
+  }
 
-    String? oldestKey;
-    DateTime? oldestTime;
-    _accessTimes.forEach((key, timestamp) {
-      if (oldestTime == null || timestamp.isBefore(oldestTime!)) {
-        oldestKey = key;
-        oldestTime = timestamp;
-      }
-    });
-
-    if (oldestKey != null) {
-      await remove(oldestKey!);
+  Future<void> _trimToSize() async {
+    while (_accessOrder.length > maxSize) {
+      await _remove(_accessOrder.first);
     }
+  }
+
+  Future<T> _run<T>(FutureOr<T> Function() operation) => _enqueue(() {
+    if (_disposed) {
+      throw StateError('BlobCache has been disposed');
+    }
+    return operation();
+  });
+
+  Future<T> _enqueue<T>(FutureOr<T> Function() operation) {
+    final result = _pending.then((_) => operation());
+    // A failed operation must not prevent the next one from running. The
+    // caller still receives the original error through result.
+    _pending = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
   }
 }
