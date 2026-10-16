@@ -38,4 +38,4 @@ jobs:
       - name: Browser HTTP and memory-cache runtime tests (JavaScript)
         env:
           CHROME_EXECUTABLE: /usr/bin/google-chrome
-        run: flutter test --no-pub --platform chrome test/browser/http_browser_test.dart test/cache_regression_test.dart
+        run: flutter test --no-pub --platform chrome test/browser/ test/cache_regression_test.dart

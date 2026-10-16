@@ -87,6 +87,7 @@ export 'src/chain/system_state_reader.dart';
 export 'src/constants/walrus_constants.dart';
 export 'src/contracts/transaction_builder.dart';
 export 'src/encoding/blob_encoder.dart';
+export 'src/encoding/default_blob_encoder.dart';
 export 'src/models/protocol_types.dart';
 export 'src/upload_relay/upload_relay_client.dart';
 

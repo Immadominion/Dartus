@@ -32,4 +32,12 @@ dev_dependencies:
   lints: ^5.0.0
   test: ^1.25.2
   mockito: ^5.4.4
+  stream_channel: ^2.1.0
   build_runner: ^2.4.0
+
+flutter:
+  assets:
+    # walrus-wasm for blob metadata on Flutter web (see assets/walrus_wasm/README.md).
+    - assets/walrus_wasm/walrus_wasm.js
+    - assets/walrus_wasm/walrus_wasm_bg.wasm
+    - assets/walrus_wasm/walrus_metadata_worker.js
