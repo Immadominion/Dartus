@@ -1,6 +1,9 @@
 @TestOn('browser')
 library;
 
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
+
 import 'package:crypto/crypto.dart';
 import 'package:dartus/dartus.dart';
 import 'package:dartus/src/encoding/wasm_blob_encoder.dart'
@@ -44,6 +47,35 @@ void main() {
 
   test('the default encoder on the web is WasmBlobEncoder', () {
     expect(createDefaultBlobEncoder(), isA<WasmBlobEncoder>());
+  });
+
+  test('assets resolve against <base href>, not a deep route', () {
+    final document = globalContext['document']! as JSObject;
+    final history = globalContext['history']! as JSObject;
+    final before = Uri.base.toString();
+    final base = document.callMethod<JSObject>(
+      'createElement'.toJS,
+      'base'.toJS,
+    )..['href'] = Uri.base.resolve('/app/').toString().toJS;
+    (document['head']! as JSObject).callMethod<JSAny?>('prepend'.toJS, base);
+    history.callMethodVarArgs<JSAny?>('pushState'.toJS, [
+      null,
+      ''.toJS,
+      '/app/v/abc/manage'.toJS,
+    ]);
+    addTearDown(() {
+      base.callMethod<JSAny?>('remove'.toJS);
+      history.callMethodVarArgs<JSAny?>('replaceState'.toJS, [
+        null,
+        ''.toJS,
+        before.toJS,
+      ]);
+    });
+
+    expect(
+      WasmBlobEncoder().baseUrl,
+      Uri.base.resolve('/app/assets/packages/dartus/assets/walrus_wasm/'),
+    );
   });
 
   test('a worker that cannot start fails with a clear error', () {

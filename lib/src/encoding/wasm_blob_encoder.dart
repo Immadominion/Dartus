@@ -16,7 +16,8 @@ import '../utils/encoding_utils.dart' show kEncodingTypeRS2;
 import 'blob_encoder.dart';
 
 /// Where Flutter web serves the `walrus-wasm` files bundled with Dartus,
-/// relative to the page's base URL.
+/// relative to the document's base URL (`<base href>` in Flutter's
+/// `index.html`), not the current route.
 const defaultWalrusWasmPath = 'assets/packages/dartus/assets/walrus_wasm/';
 
 /// The platform's default [BlobEncoder]: [WasmBlobEncoder] on the web,
@@ -37,7 +38,8 @@ BlobEncoder createDefaultBlobEncoder({Uri? wasmBaseUrl}) =>
 /// with Dartus; it may be on another origin if that origin allows CORS.
 class WasmBlobEncoder extends BlobEncoder {
   WasmBlobEncoder({Uri? baseUrl})
-    : baseUrl = baseUrl ?? Uri.base.resolve(defaultWalrusWasmPath);
+    : baseUrl =
+          baseUrl ?? Uri.parse(_documentBaseUri).resolve(defaultWalrusWasmPath);
 
   final Uri baseUrl;
 
@@ -198,6 +200,11 @@ extension type _BlobOptions._(JSObject _) implements JSObject {
 extension type _Url._(JSObject _) implements JSObject {
   external static String createObjectURL(_Blob blob);
 }
+
+/// Flutter's assets are relative to `<base href>`; `Uri.base` is the page's
+/// full URL, which on a deep route like `/v/abc/manage` points elsewhere.
+@JS('document.baseURI')
+external String get _documentBaseUri;
 
 @JS('crypto.subtle')
 external _SubtleCrypto get _subtle;
