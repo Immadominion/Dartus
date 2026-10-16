@@ -1,12 +1,16 @@
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dartus/src/client/walrus_client.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:test/test.dart';
 
 void main() {
+  _readOnlyClient();
+
   group('WalrusClient - Constructor Validation', () {
     late Directory tempDir;
 
@@ -28,7 +32,7 @@ void main() {
         logLevel: WalrusLogLevel.none,
       );
 
-      expect(client.publisherBaseUrl.host, equals('publisher.example.com'));
+      expect(client.publisherBaseUrl!.host, equals('publisher.example.com'));
       expect(client.aggregatorBaseUrl.host, equals('aggregator.example.com'));
       client.close();
     });
@@ -41,7 +45,7 @@ void main() {
         logLevel: WalrusLogLevel.none,
       );
 
-      expect(client.publisherBaseUrl.path, endsWith('/'));
+      expect(client.publisherBaseUrl!.path, endsWith('/'));
       expect(client.aggregatorBaseUrl.path, endsWith('/'));
       client.close();
     });
@@ -67,7 +71,7 @@ void main() {
         logLevel: WalrusLogLevel.none,
       );
 
-      expect(client.publisherBaseUrl.host, equals('example.com'));
+      expect(client.publisherBaseUrl!.host, equals('example.com'));
       client.close();
     });
 
@@ -345,7 +349,7 @@ void main() {
         logLevel: WalrusLogLevel.none,
       );
 
-      expect(client.publisherBaseUrl.path, equals('/'));
+      expect(client.publisherBaseUrl!.path, equals('/'));
       expect(client.aggregatorBaseUrl.path, equals('/'));
       client.close();
     });
@@ -358,7 +362,7 @@ void main() {
         logLevel: WalrusLogLevel.none,
       );
 
-      expect(client.publisherBaseUrl.path, equals('/api/v2/'));
+      expect(client.publisherBaseUrl!.path, equals('/api/v2/'));
       expect(client.aggregatorBaseUrl.path, equals('/storage/'));
       client.close();
     });
@@ -374,7 +378,7 @@ void main() {
       );
 
       // Verify normalized path ends with slash
-      expect(client.publisherBaseUrl.path, endsWith('/'));
+      expect(client.publisherBaseUrl!.path, endsWith('/'));
       expect(client.aggregatorBaseUrl.path, endsWith('/'));
       client.close();
     });
@@ -387,10 +391,35 @@ void main() {
         logLevel: WalrusLogLevel.none,
       );
 
-      expect(client.publisherBaseUrl.host, equals('localhost'));
-      expect(client.publisherBaseUrl.port, equals(8080));
+      expect(client.publisherBaseUrl!.host, equals('localhost'));
+      expect(client.publisherBaseUrl!.port, equals(8080));
       expect(client.aggregatorBaseUrl.path, equals('/api/'));
       client.close();
     });
+  });
+}
+
+void _readOnlyClient() {
+  test('a client without a publisher reads, and refuses to upload', () async {
+    final client = WalrusClient(
+      aggregatorBaseUrl: Uri.parse('https://aggregator.test'),
+      httpClient: MockClient(
+        (request) async => http.Response.bytes([1, 2, 3], 200),
+      ),
+    );
+    addTearDown(client.close);
+
+    expect(client.publisherBaseUrl, isNull);
+    expect(await client.getBlob('blob'), [1, 2, 3]);
+    await expectLater(
+      client.putBlob(data: Uint8List(1)),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('WalrusWriter'),
+        ),
+      ),
+    );
   });
 }

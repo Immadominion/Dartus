@@ -258,6 +258,18 @@ void main() {
       }
     });
 
+    test('a batch estimate prices the laid-out quilt', () async {
+      final files = [
+        QuiltBlob(identifier: 'a', contents: Uint8List(10)),
+        QuiltBlob(identifier: 'b', contents: Uint8List(20)),
+      ];
+      final quilt = encodeQuilt(blobs: files, numShards: 1000).quilt;
+      final batch = await writer.estimateFiles(files, epochs: 2);
+      final single = await writer.estimate(size: quilt.length, epochs: 2);
+      expect(batch.cost.total, single.cost.total);
+      expect(batch.relayTip, single.relayTip);
+    });
+
     test('needs at least one file', () {
       expect(
         () => writer.writeFilesFlow(const [], epochs: 1),

@@ -25,6 +25,9 @@ web and natively.
   `sui:signAndExecuteTransaction`, with WAL and tip intents resolved),
   `WalrusTransactionSigner`, `WalletTransactionSigner` and
   `KeypairTransactionSigner`.
+- `WalrusWriter.estimateFiles` prices a batch as the quilt it will become.
+- `WalrusClient` can be read-only: `publisherBaseUrl` is optional, and
+  uploads without one throw `StateError`.
 - `WalrusChainReader`: Walrus system state, Blob objects, created objects
   and balances over Sui gRPC-web.
 - `WalrusTransactionBuilder.addRegisterBlob`, paying with exact-amount WAL
@@ -44,6 +47,7 @@ web and natively.
   **encoded** size; `sendUploadRelayTip` takes `encodedSize`. A tip above
   `max` now throws instead of being capped.
 - `WalrusNetwork.defaultUploadRelayUrl` is non-null (mainnet has a relay).
+- `WalrusClient.publisherBaseUrl` is nullable.
 
 ### Fixed
 

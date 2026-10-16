@@ -86,6 +86,18 @@ class WalrusWriter {
     );
   }
 
+  /// What storing [files] as one quilt (see [writeFiles]) costs right now.
+  /// The quilt is laid out to measure it, so this costs about as much
+  /// memory as the files themselves.
+  Future<WalrusWriteEstimate> estimateFiles(
+    List<QuiltBlob> files, {
+    required int epochs,
+  }) async {
+    final shards = (await chain.system()).nShards;
+    final quilt = encodeQuilt(blobs: files, numShards: shards);
+    return estimate(size: quilt.quilt.length, epochs: epochs);
+  }
+
   /// The SUI and WAL [address] holds.
   Future<WalrusWalletBalances> balances(String address) =>
       chain.balances(address);

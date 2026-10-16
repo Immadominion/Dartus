@@ -37,8 +37,13 @@ export '../logging/walrus_logging.dart';
 /// ```
 class WalrusClient {
   /// Configures a client with publisher and aggregator endpoints.
+  ///
+  /// [publisherBaseUrl] is only needed for uploads: a client without one
+  /// reads from the aggregator, and its upload methods throw [StateError].
+  /// (Apps where people pay with their own wallet store through
+  /// `WalrusWriter` and only read through this client.)
   WalrusClient({
-    required Uri publisherBaseUrl,
+    Uri? publisherBaseUrl,
     required Uri aggregatorBaseUrl,
     this.timeout = const Duration(seconds: 30),
     Directory? cacheDirectory,
@@ -51,7 +56,9 @@ class WalrusClient {
     http.Client? httpClient,
     WalrusLogLevel logLevel = WalrusLogLevel.none,
     WalrusLogHandler? onLog,
-  }) : publisherBaseUrl = _normalizeBaseUrl(publisherBaseUrl),
+  }) : publisherBaseUrl = publisherBaseUrl == null
+           ? null
+           : _normalizeBaseUrl(publisherBaseUrl),
        aggregatorBaseUrl = _normalizeBaseUrl(aggregatorBaseUrl),
        cache = BlobCache(cacheDirectory: cacheDirectory, maxSize: cacheMaxSize),
        _jwtToken = jwtToken,
@@ -65,7 +72,8 @@ class WalrusClient {
     _executor = RequestExecutor(_httpClient, timeout, onVerboseLog: logVerbose);
   }
 
-  final Uri publisherBaseUrl;
+  /// Where uploads go; null for a read-only client.
+  final Uri? publisherBaseUrl;
   final Uri aggregatorBaseUrl;
 
   /// Maximum wait for response headers and maximum idle time between body
@@ -382,7 +390,14 @@ class WalrusClient {
   }
 
   Uri _publisherUri(String path, {Map<String, String>? queryParameters}) {
-    final resolved = publisherBaseUrl.resolveUri(Uri(path: path));
+    final publisher = publisherBaseUrl;
+    if (publisher == null) {
+      throw StateError(
+        'This WalrusClient has no publisherBaseUrl, so it can only read. '
+        'Pass one to upload through a publisher, or use WalrusWriter.',
+      );
+    }
+    final resolved = publisher.resolveUri(Uri(path: path));
     if (queryParameters == null || queryParameters.isEmpty) {
       return resolved;
     }
