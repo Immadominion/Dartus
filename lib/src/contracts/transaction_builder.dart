@@ -13,11 +13,10 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:sui/builder/transaction.dart';
 
-import '../utils/encoding_utils.dart' show signersToBitmap;
-
 import '../constants/walrus_constants.dart';
 import '../models/protocol_types.dart';
 import '../utils/blob_id_utils.dart';
+import '../utils/encoding_utils.dart' show kEncodingTypeRS2, signersToBitmap;
 
 /// Builds Walrus-specific Sui transactions.
 ///
@@ -154,6 +153,71 @@ class WalrusTransactionBuilder {
     }
 
     return tx;
+  }
+
+  // -------------------------------------------------------------------------
+  // Register Blob (WAL from the sender's coins or address balance)
+  // -------------------------------------------------------------------------
+
+  /// Add `reserve_space` and `register_blob` to [tx] and return the new
+  /// `Blob`, leaving it to the caller to transfer it.
+  ///
+  /// Each payment is a `CoinWithBalance` intent for exactly the amount the
+  /// call takes, then `coin::destroy_zero`, as in the TS SDK's
+  /// `registerBlob()`. The intents must be resolved against the sender's
+  /// WAL coins and address balance before the transaction is signed; a
+  /// `Transaction.build` with a client does that, and `WalrusWriter`
+  /// resolves them before handing the transaction to a wallet.
+  TransactionResult addRegisterBlob(
+    Transaction tx, {
+    required String blobId,
+    required Uint8List rootHash,
+    required int size,
+    required int encodedSize,
+    required int epochs,
+    required bool deletable,
+    required String walType,
+    required BigInt storageCost,
+    required BigInt writeCost,
+  }) {
+    final storagePayment = tx.coin(walType, storageCost, useGasCoin: false);
+    final storage = tx.moveCall(
+      '$walrusPackageId::system::reserve_space',
+      arguments: [
+        tx.object(packageConfig.systemObjectId),
+        tx.pure.u64(BigInt.from(encodedSize)),
+        tx.pure.u32(epochs),
+        storagePayment,
+      ],
+    );
+    _destroyZero(tx, walType, storagePayment);
+
+    final writePayment = tx.coin(walType, writeCost, useGasCoin: false);
+    final blob = tx.moveCall(
+      '$walrusPackageId::system::register_blob',
+      arguments: [
+        tx.object(packageConfig.systemObjectId),
+        storage,
+        tx.pure.u256(blobIdToInt(blobId)),
+        tx.pure.u256(_rootHashToBigInt(rootHash)),
+        tx.pure.u64(BigInt.from(size)),
+        tx.pure.u8(kEncodingTypeRS2),
+        tx.pure.boolean(deletable),
+        writePayment,
+      ],
+    );
+    _destroyZero(tx, walType, writePayment);
+    return blob;
+  }
+
+  /// Payments are split for the exact amount, so the Move call leaves a
+  /// zero coin, and `Coin<WAL>` has no `drop`.
+  static void _destroyZero(Transaction tx, String walType, Object coin) {
+    tx.moveCall(
+      '0x2::coin::destroy_zero',
+      typeArguments: [walType],
+      arguments: [coin],
+    );
   }
 
   // -------------------------------------------------------------------------

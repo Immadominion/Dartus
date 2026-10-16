@@ -91,6 +91,11 @@ export 'src/encoding/default_blob_encoder.dart';
 export 'src/models/protocol_types.dart';
 export 'src/upload_relay/upload_relay_client.dart';
 
+// Wallet writes — the signer pays, through the upload relay (web and native)
+export 'src/wallet/transaction_signer.dart';
+export 'src/wallet/walrus_chain_reader.dart';
+export 'src/wallet/walrus_writer.dart';
+
 // Phase 3 — Full Direct Mode (Client-Side Encoding)
 // NOTE: the Rust FFI surface (WalrusBlobEncoder, WalrusFfiBindings,
 // WalrusDirectClient, WriteBlobFlow, WriteFilesFlow) is exported from
