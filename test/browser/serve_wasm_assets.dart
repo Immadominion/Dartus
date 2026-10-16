@@ -11,6 +11,22 @@ Future<void> hybridMain(StreamChannel<Object?> channel) async {
     final response = request.response
       ..headers.set('Access-Control-Allow-Origin', '*');
     final segments = request.uri.pathSegments;
+    if (segments.length == 2 && segments.first == 'silent') {
+      // A script that loads but never reports ready.
+      response.headers
+        ..contentType = ContentType('text', 'javascript', charset: 'utf-8')
+        ..set('Access-Control-Allow-Origin', '*');
+      response.write('// does nothing');
+      await response.close();
+      return;
+    }
+    if (segments.isNotEmpty && segments.first == 'spa') {
+      // A single-page-app server answering every unknown path with its page.
+      response.headers.contentType = ContentType.html;
+      response.write('<!doctype html><title>App</title>');
+      await response.close();
+      return;
+    }
     final name = segments.length == 1 ? segments.single : '';
     final file = File('${root.path}/$name');
     if (name.isEmpty || !await file.exists()) {

@@ -37,11 +37,19 @@ BlobEncoder createDefaultBlobEncoder({Uri? wasmBaseUrl}) =>
 /// and `walrus_metadata_worker.js`. It defaults to the copies Flutter bundles
 /// with Dartus; it may be on another origin if that origin allows CORS.
 class WasmBlobEncoder extends BlobEncoder {
-  WasmBlobEncoder({Uri? baseUrl})
-    : baseUrl =
-          baseUrl ?? Uri.parse(_documentBaseUri).resolve(defaultWalrusWasmPath);
+  WasmBlobEncoder({
+    Uri? baseUrl,
+    this.startTimeout = const Duration(seconds: 30),
+  }) : baseUrl =
+           baseUrl ??
+           Uri.parse(_documentBaseUri).resolve(defaultWalrusWasmPath);
 
   final Uri baseUrl;
+
+  /// How long the worker may take to load walrus-wasm before writes fail.
+  /// Without a limit, a worker whose scripts never run (blocked, or served
+  /// wrongly) would leave callers waiting forever.
+  final Duration startTimeout;
 
   static final _workers = <String, _MetadataWorker>{};
 
@@ -49,7 +57,7 @@ class WasmBlobEncoder extends BlobEncoder {
     final url = baseUrl.resolve('walrus_metadata_worker.js').toString();
     final existing = _workers[url];
     if (existing != null && !existing.failed) return existing;
-    return _workers[url] = _MetadataWorker(url);
+    return _workers[url] = _MetadataWorker(url, startTimeout);
   }
 
   @override
@@ -82,13 +90,19 @@ class WasmBlobEncoder extends BlobEncoder {
 
 /// One module worker running `walrus_metadata_worker.js`.
 class _MetadataWorker {
-  _MetadataWorker(String scriptUrl) : _worker = _spawn(scriptUrl) {
+  _MetadataWorker(String scriptUrl, this.startTimeout)
+    : _worker = _spawn(scriptUrl) {
     _worker.onmessage = _onMessage.toJS;
     _worker.onerror = _onError.toJS;
+    // A start failure may come before anyone waits; callers still see it.
+    _ready.future.ignore();
   }
+
+  final Duration startTimeout;
 
   final _Worker _worker;
   final _pending = <int, Completer<(Uint8List, Uint8List)>>{};
+  final _ready = Completer<void>();
   var _nextId = 0;
 
   /// Set when the worker could not start (bad URL, CSP, network). The next
@@ -111,7 +125,16 @@ class _MetadataWorker {
   static String _jsString(String value) =>
       '"${value.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}"';
 
-  Future<(Uint8List, Uint8List)> compute(Uint8List data, int numShards) {
+  Future<(Uint8List, Uint8List)> compute(Uint8List data, int numShards) async {
+    await _ready.future.timeout(
+      startTimeout,
+      onTimeout: () => _fail(
+        'walrus-wasm did not start within ${startTimeout.inSeconds} s. Check '
+        'that walrus_metadata_worker.js, walrus_wasm.js and '
+        'walrus_wasm_bg.wasm are served (JavaScript and application/wasm) '
+        'and allowed by the page\'s Content-Security-Policy',
+      ),
+    );
     final id = _nextId++;
     final completer = _pending[id] = Completer();
     // Transfer a copy, so the caller's bytes stay usable.
@@ -124,8 +147,32 @@ class _MetadataWorker {
     return completer.future;
   }
 
+  /// Stop the worker and fail every waiting call with [reason].
+  Never _fail(String reason) {
+    final error = StateError(reason);
+    failed = true;
+    _worker.terminate();
+    if (!_ready.isCompleted) _ready.completeError(error);
+    for (final completer in _pending.values) {
+      completer.completeError(error);
+    }
+    _pending.clear();
+    throw error;
+  }
+
   void _onMessage(_MessageEvent event) {
     final data = event.data;
+    if (data['ready'] != null) {
+      if (!_ready.isCompleted) _ready.complete();
+      return;
+    }
+    final fatal = data['fatal'];
+    if (fatal != null) {
+      _failQuietly(
+        'walrus-wasm could not start: ${(fatal as JSString).toDart}',
+      );
+      return;
+    }
     final id = (data['id']! as JSNumber).toDartInt;
     final completer = _pending.remove(id);
     if (completer == null) return;
@@ -150,17 +197,20 @@ class _MetadataWorker {
   }
 
   void _onError(_ErrorEvent event) {
-    failed = true;
-    _worker.terminate();
     final reason = event.message;
-    final error = StateError(
+    _failQuietly(
       'Could not run the walrus-wasm worker'
       '${reason == null || reason.isEmpty ? '' : ': $reason'}',
     );
-    for (final completer in _pending.values) {
-      completer.completeError(error);
+  }
+
+  /// [_fail] from an event handler, where there is no caller to throw to.
+  void _failQuietly(String reason) {
+    try {
+      _fail(reason);
+    } on StateError {
+      // Delivered to every waiting call.
     }
-    _pending.clear();
   }
 }
 

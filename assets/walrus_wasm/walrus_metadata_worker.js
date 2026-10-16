@@ -2,12 +2,17 @@
 // page's main thread, so the interface keeps responding while a large file is
 // hashed (about a second for small files, several for 100 MB).
 //
-// Request:  { id, nShards, bytes: ArrayBuffer }
-// Response: { id, blobId: Uint8Array, rootHash: Uint8Array, length, type }
-//        or { id, error: string }
+// On start:  { ready: true } once walrus-wasm is loaded, or { fatal: string }
+// Request:   { id, nShards, bytes: ArrayBuffer }
+// Response:  { id, blobId: Uint8Array, rootHash: Uint8Array, length, type }
+//         or { id, error: string }
 import init, { BlobEncoder } from './walrus_wasm.js';
 
 const ready = init();
+ready.then(
+  () => self.postMessage({ ready: true }),
+  (error) => self.postMessage({ fatal: String(error?.message ?? error) }),
+);
 
 self.onmessage = async ({ data: { id, nShards, bytes } }) => {
   try {

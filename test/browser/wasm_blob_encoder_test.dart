@@ -78,6 +78,33 @@ void main() {
     );
   });
 
+  test('an HTML page in place of the scripts fails instead of hanging', () {
+    final spa = createDefaultBlobEncoder(wasmBaseUrl: assets.resolve('spa/'));
+    expect(
+      spa
+          .computeMetadata(blobMetadataVectors.first.data(), 1000)
+          .timeout(const Duration(seconds: 20)),
+      throwsA(isA<StateError>()),
+    );
+  });
+
+  test('a worker that never gets ready fails after the start timeout', () {
+    final silent = WasmBlobEncoder(
+      baseUrl: assets.resolve('silent/'),
+      startTimeout: const Duration(seconds: 2),
+    );
+    expect(
+      silent.computeMetadata(blobMetadataVectors.first.data(), 1000),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('did not start'),
+        ),
+      ),
+    );
+  });
+
   test('a worker that cannot start fails with a clear error', () {
     final broken = createDefaultBlobEncoder(
       wasmBaseUrl: assets.resolve('missing/'),
