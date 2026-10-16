@@ -23,6 +23,9 @@ import 'package:sui/sui.dart';
 
 import '../logging/walrus_logging.dart';
 import '../chain/committee_resolver.dart';
+import '../chain/direct_grpc_client.dart';
+import '../chain/storage_certificate.dart';
+import '../chain/write_flow_verification.dart';
 import '../chain/system_state_reader.dart';
 import '../constants/walrus_constants.dart';
 import '../contracts/transaction_builder.dart';
@@ -47,6 +50,7 @@ import '../utils/quilts.dart';
 import '../utils/randomness.dart';
 import '../utils/retry.dart';
 import '../utils/wal_coin_pagination.dart';
+import '../utils/upload_policy.dart';
 import 'write_blob_flow.dart';
 import 'write_files_flow.dart';
 
@@ -147,14 +151,12 @@ class WalrusDirectClient {
   /// Reused across writes for connection pooling.
   final Map<String, StorageNodeClient> _nodeClients = {};
 
-  /// Shared HTTP client for storage node connections.
-  /// Configured to accept all certificates (testnet nodes may use
-  /// certs not in the default trust store).
+  /// Shared HTTP client for storage node connections, using platform TLS
+  /// certificate verification.
   late final HttpClient _sharedHttpClient = _createSharedHttpClient();
 
   static HttpClient _createSharedHttpClient() {
     final client = HttpClient();
-    client.badCertificateCallback = (cert, host, port) => true;
     client.connectionTimeout = const Duration(seconds: 8);
     client.idleTimeout = const Duration(seconds: 15);
     return client;
@@ -166,15 +168,9 @@ class WalrusDirectClient {
   /// Committee resolver for auto-resolving committee from chain.
   late final CommitteeResolver _committeeResolver;
 
-  /// Optional BLS12-381 provider for signature aggregation.
-  ///
-  /// When provided, [_buildCertificateFromConfirmations] aggregates
-  /// multiple storage node signatures into a single BLS aggregate
-  /// signature for on-chain certification.
-  ///
-  /// Without a provider, the first valid signature is used as a
-  /// placeholder — sufficient for relay mode but invalid for
-  /// direct-mode on-chain certification with multiple signers.
+  /// Initialized BLS12-381 provider for direct-write signature verification
+  /// and aggregation. Required before registration in direct mode; relay
+  /// uploads receive their certificate from the relay.
   final BlsProvider? blsProvider;
 
   /// Logger for this client. Configure [WalrusLogger.level] or
@@ -185,7 +181,8 @@ class WalrusDirectClient {
     this.network,
     WalrusPackageConfig? packageConfig,
     String? walrusPackageId,
-    required this.suiClient,
+    SuiClient? suiClient,
+    SuiGrpcClient? grpcClient,
     this.uploadRelayConfig,
     this.encoder,
     this.blsProvider,
@@ -197,15 +194,29 @@ class WalrusDirectClient {
            (throw ArgumentError(
              'Either network or packageConfig must be provided',
            )),
+       suiClient =
+           suiClient ??
+           DirectGrpcClient(
+             grpcClient ??
+                 SuiGrpcClient(
+                   network: switch (network) {
+                     WalrusNetwork.testnet => SuiNetwork.testnet,
+                     WalrusNetwork.mainnet => SuiNetwork.mainnet,
+                     null => throw ArgumentError(
+                       'Provide network or grpcClient',
+                     ),
+                   },
+                 ),
+           ),
        _walrusPackageId = walrusPackageId,
        logger = WalrusLogger(level: logLevel, onRecord: onLog) {
     _stateReader = SystemStateReader(
-      suiClient: suiClient,
+      suiClient: this.suiClient,
       config: this.packageConfig,
     );
 
     _committeeResolver = CommitteeResolver(
-      suiClient: suiClient,
+      suiClient: this.suiClient,
       config: this.packageConfig,
       stateReader: _stateReader,
     );
@@ -223,6 +234,7 @@ class WalrusDirectClient {
     required WalrusNetwork network,
     String? walrusPackageId,
     SuiClient? suiClient,
+    SuiGrpcClient? grpcClient,
     UploadRelayConfig? uploadRelay,
     BlobEncoder? encoder,
     BlsProvider? blsProvider,
@@ -232,7 +244,8 @@ class WalrusDirectClient {
     return WalrusDirectClient(
       network: network,
       walrusPackageId: walrusPackageId,
-      suiClient: suiClient ?? SuiClient(network.defaultRpcUrl),
+      suiClient: suiClient,
+      grpcClient: grpcClient,
       uploadRelayConfig:
           uploadRelay ?? UploadRelayConfig(host: network.defaultUploadRelayUrl),
       encoder: encoder,
@@ -248,6 +261,7 @@ class WalrusDirectClient {
 
   /// Close cached storage node connections. Call when done with this client.
   void close() {
+    _relayClient?.close();
     _nodeClients.clear();
     _sharedHttpClient.close();
   }
@@ -319,6 +333,7 @@ class WalrusDirectClient {
     final blobType = await getBlobType();
     final results = <Map<String, dynamic>>[];
     String? cursor;
+    final seenCursors = <String>{};
 
     do {
       final page = await suiClient.getOwnedObjects(
@@ -373,7 +388,10 @@ class WalrusDirectClient {
       }
 
       cursor = page.hasNextPage ? page.nextCursor : null;
-      if (cursor != null && cursor.isEmpty) cursor = null;
+      if (page.hasNextPage &&
+          (cursor == null || cursor.isEmpty || !seenCursors.add(cursor))) {
+        throw WalrusClientError('Owned Blob pagination did not advance');
+      }
     } while (cursor != null);
 
     return results;
@@ -435,76 +453,72 @@ class WalrusDirectClient {
   Future<Map<String, dynamic>?> getBlobObjectInfo({
     required String objectId,
   }) async {
-    try {
-      final resp = await suiClient.getObject(
-        objectId,
-        options: SuiObjectDataOptions(showContent: true),
-      );
-
-      final content = resp.data?.content;
-      if (content == null) return null;
-
-      Map<String, dynamic>? fields;
-      if (content.fields is Map<String, dynamic>) {
-        fields = content.fields as Map<String, dynamic>;
+    final resp = await suiClient.getObject(
+      objectId,
+      options: SuiObjectDataOptions(showContent: true, showType: true),
+    );
+    if (resp.error != null) {
+      if (resp.error!.code == 'notExists' || resp.error!.code == 'deleted') {
+        return null;
       }
-      if (fields == null) return null;
-
-      final blobIdRaw = fields['blob_id'] ?? fields['blobId'];
-      String? blobIdBase64;
-      if (blobIdRaw is String) {
-        final bigInt = BigInt.tryParse(blobIdRaw);
-        if (bigInt != null) {
-          blobIdBase64 = blobIdFromInt(bigInt);
-        } else {
-          blobIdBase64 = blobIdRaw;
-        }
-      } else if (blobIdRaw is int) {
-        blobIdBase64 = blobIdFromInt(BigInt.from(blobIdRaw));
-      }
-      if (blobIdBase64 == null) return null;
-
-      // Parse certified_epoch (null if never certified).
-      final certifiedEpochRaw =
-          fields['certified_epoch'] ?? fields['certifiedEpoch'];
-      int? certifiedEpoch;
-      if (certifiedEpochRaw is int) {
-        certifiedEpoch = certifiedEpochRaw;
-      } else if (certifiedEpochRaw is String) {
-        certifiedEpoch = int.tryParse(certifiedEpochRaw);
-      }
-
-      // Parse storage sub-object for epoch range.
-      int? startEpoch;
-      int? endEpoch;
-      final storage = fields['storage'];
-      if (storage is Map<String, dynamic>) {
-        final storageFields =
-            (storage['fields'] as Map<String, dynamic>?) ?? storage;
-        final startRaw =
-            storageFields['start_epoch'] ?? storageFields['startEpoch'];
-        final endRaw = storageFields['end_epoch'] ?? storageFields['endEpoch'];
-        if (startRaw is int) startEpoch = startRaw;
-        if (startRaw is String) startEpoch = int.tryParse(startRaw);
-        if (endRaw is int) endEpoch = endRaw;
-        if (endRaw is String) endEpoch = int.tryParse(endRaw);
-      }
-
-      return {
-        'objectId': objectId,
-        'blobId': blobIdBase64,
-        'size': fields['size'],
-        'certifiedEpoch': certifiedEpoch,
-        'registeredEpoch':
-            fields['registered_epoch'] ?? fields['registeredEpoch'],
-        'startEpoch': startEpoch,
-        'endEpoch': endEpoch,
-        'deletable': fields['deletable'],
-        'encodingType': fields['encoding_type'] ?? fields['erasure_code_type'],
-      };
-    } catch (_) {
-      return null;
+      throw WalrusClientError('Cannot read Blob $objectId: ${resp.error}');
     }
+    if (resp.data?.type != await getBlobType()) return null;
+    final content = resp.data?.content;
+    if (content == null) return null;
+
+    Map<String, dynamic>? fields;
+    if (content.fields is Map<String, dynamic>) {
+      fields = content.fields as Map<String, dynamic>;
+    }
+    if (fields == null) return null;
+
+    final blobIdRaw = fields['blob_id'] ?? fields['blobId'];
+    String? blobIdBase64;
+    if (blobIdRaw is String) {
+      final bigInt = BigInt.tryParse(blobIdRaw);
+      if (bigInt != null) {
+        blobIdBase64 = blobIdFromInt(bigInt);
+      } else {
+        blobIdBase64 = blobIdRaw;
+      }
+    } else if (blobIdRaw is int) {
+      blobIdBase64 = blobIdFromInt(BigInt.from(blobIdRaw));
+    }
+    if (blobIdBase64 == null) return null;
+
+    final certifiedEpoch = certifiedEpochFromJson(
+      fields['certified_epoch'] ?? fields['certifiedEpoch'],
+    );
+
+    // Parse storage sub-object for epoch range.
+    int? startEpoch;
+    int? endEpoch;
+    final storage = fields['storage'];
+    if (storage is Map<String, dynamic>) {
+      final storageFields =
+          (storage['fields'] as Map<String, dynamic>?) ?? storage;
+      final startRaw =
+          storageFields['start_epoch'] ?? storageFields['startEpoch'];
+      final endRaw = storageFields['end_epoch'] ?? storageFields['endEpoch'];
+      if (startRaw is int) startEpoch = startRaw;
+      if (startRaw is String) startEpoch = int.tryParse(startRaw);
+      if (endRaw is int) endEpoch = endRaw;
+      if (endRaw is String) endEpoch = int.tryParse(endRaw);
+    }
+
+    return {
+      'objectId': objectId,
+      'blobId': blobIdBase64,
+      'size': fields['size'],
+      'certifiedEpoch': certifiedEpoch,
+      'registeredEpoch':
+          fields['registered_epoch'] ?? fields['registeredEpoch'],
+      'startEpoch': startEpoch,
+      'endEpoch': endEpoch,
+      'deletable': fields['deletable'],
+      'encodingType': fields['encoding_type'] ?? fields['erasure_code_type'],
+    };
   }
 
   /// Resolve an input that may be either a base64 blob ID or a Sui
@@ -593,7 +607,10 @@ class WalrusDirectClient {
       final firstNode = randomizedNodes.first;
       try {
         final client = _getOrCreateNodeClient(firstNode.endpointUrl);
-        return await client.getBlobMetadata(blobId: blobId);
+        return _validateMetadata(
+          await client.getBlobMetadata(blobId: blobId),
+          blobId,
+        );
       } on NotFoundError {
         numNotFoundWeight += firstNode.shardIndices.length;
       } on LegallyUnavailableError {
@@ -615,7 +632,10 @@ class WalrusDirectClient {
         try {
           final client = _getOrCreateNodeClient(node.endpointUrl);
           return _MetadataResult.success(
-            await client.getBlobMetadata(blobId: blobId),
+            _validateMetadata(
+              await client.getBlobMetadata(blobId: blobId),
+              blobId,
+            ),
           );
         } on NotFoundError {
           return _MetadataResult.notFound(node.shardIndices.length);
@@ -654,6 +674,18 @@ class WalrusDirectClient {
     throw NoBlobMetadataReceivedError(
       'No valid blob metadata could be retrieved from any storage node.',
     );
+  }
+
+  Uint8List _validateMetadata(Uint8List bytes, String blobId) {
+    final metadata = parseBlobMetadataResponse(bytes);
+    if (blobIdToUrlSafeBase64(metadata.blobIdBytes) != blobId ||
+        metadata.encodingType != kEncodingTypeRS2 ||
+        metadata.unencodedLength < 0) {
+      throw const FormatException(
+        'Storage node metadata does not match the requested RS2 blob',
+      );
+    }
+    return bytes;
   }
 
   /// Read primary slivers from storage nodes for blob reconstruction.
@@ -948,6 +980,7 @@ class WalrusDirectClient {
     String? walCoinObjectId,
     Map<String, String?>? attributes,
   }) async {
+    requireDeletableUpload(deletable);
     final encoded = await encodeQuiltBlobs(blobs: blobs);
     final result = await writeBlob(
       blob: encoded.quilt,
@@ -1000,6 +1033,7 @@ class WalrusDirectClient {
     String? walCoinObjectId,
     Map<String, String?>? attributes,
   }) async {
+    requireDeletableUpload(deletable);
     final blobs = <QuiltBlob>[];
     for (var i = 0; i < files.length; i++) {
       final file = files[i];
@@ -1040,6 +1074,8 @@ class WalrusDirectClient {
   Future<WriteFilesFlow> writeFilesFlow({
     required List<WalrusFile> files,
   }) async {
+    if (_relayClient == null) _requireDirectSigning();
+    final committee = _relayClient == null ? await getCommittee() : _committee;
     final txBuilder = await _ensureTxBuilder();
     await _ensureTipConfig();
 
@@ -1048,8 +1084,8 @@ class WalrusDirectClient {
       txBuilder: txBuilder,
       relayClient: _relayClient,
       tipConfig: _tipConfig,
-      encoder: encoder,
-      committee: _committee,
+      encoder: encoder ?? WalrusBlobEncoder(),
+      committee: committee,
       directClient: _relayClient == null ? this : null,
       stateReader: _stateReader,
       suiClient: suiClient,
@@ -1418,7 +1454,7 @@ class WalrusDirectClient {
     final tx = txBuilder.deleteBlobTransaction(blobObjectId: blobObjectId);
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(
@@ -1464,7 +1500,7 @@ class WalrusDirectClient {
     );
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(
@@ -1522,7 +1558,7 @@ class WalrusDirectClient {
     );
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(
@@ -1557,6 +1593,7 @@ class WalrusDirectClient {
     String? walCoinObjectId,
     Map<String, String?>? attributes,
   }) async {
+    requireDeletableUpload(deletable);
     final txBuilder = await _ensureTxBuilder();
     final costs = await storageCost(size, epochs);
     final effectiveOwner = owner ?? signer.getAddress();
@@ -1606,7 +1643,7 @@ class WalrusDirectClient {
 
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(
@@ -1653,13 +1690,11 @@ class WalrusDirectClient {
       );
     }
 
-    // Resolve committee size: explicit > committee info > infer from signers.
+    // Bitmap width must include the whole committee, including non-signers.
     final resolvedCommitteeSize =
         committeeSize ??
         _committee?.nodes.length ??
-        (certificate.signers.isEmpty
-            ? 0
-            : certificate.signers.reduce((a, b) => a > b ? a : b) + 1);
+        (await _stateReader.systemState()).committeeSize;
 
     final txBuilder = await _ensureTxBuilder();
     final tx = txBuilder.certifyBlobTransaction(
@@ -1673,7 +1708,7 @@ class WalrusDirectClient {
     );
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(showEffects: true),
@@ -1705,15 +1740,23 @@ class WalrusDirectClient {
       // String for the name value, but for `vector<u8>` the Sui JSON-RPC
       // expects a JSON array of byte integers. Use a raw RPC call instead.
       final nameValue = 'metadata'.codeUnits; // UTF-8 byte array
-      final result = await suiClient.client.request(
-        'suix_getDynamicFieldObject',
-        [
+      final transport = suiClient;
+      final SuiObjectResponse response;
+      if (transport is DirectGrpcClient) {
+        response = await transport.getDynamicFieldByBcs(
           blobObjectId,
-          {'type': 'vector<u8>', 'value': nameValue},
-        ],
-      );
-
-      final response = SuiObjectResponse.fromJson(result);
+          'vector<u8>',
+          Uint8List.fromList([nameValue.length, ...nameValue]),
+        );
+      } else {
+        // Explicitly injected legacy clients retain their original transport.
+        response = SuiObjectResponse.fromJson(
+          await transport.client.request('suix_getDynamicFieldObject', [
+            blobObjectId,
+            {'type': 'vector<u8>', 'value': nameValue},
+          ]),
+        );
+      }
       final content = response.data?.content;
       if (content == null) return null;
 
@@ -1721,7 +1764,8 @@ class WalrusDirectClient {
       return _parseMetadataContent(content);
     } catch (e) {
       // Dynamic field not found → no metadata attached.
-      if (e.toString().contains('DynamicFieldNotFound') ||
+      if ((e is GrpcWebException && e.status == 5) ||
+          e.toString().contains('DynamicFieldNotFound') ||
           e.toString().contains('not found') ||
           e.toString().contains('404')) {
         return null;
@@ -1844,7 +1888,7 @@ class WalrusDirectClient {
     );
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(
@@ -1928,7 +1972,7 @@ class WalrusDirectClient {
 
     tx.mergeCoins(destination, sources);
 
-    await suiClient.signAndExecuteTransactionBlock(signer, tx);
+    await _executeTransaction(signer, tx);
 
     return coins.first.coinObjectId;
   }
@@ -2011,7 +2055,7 @@ class WalrusDirectClient {
     );
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(showEffects: true),
@@ -2048,7 +2092,7 @@ class WalrusDirectClient {
     );
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(showEffects: true),
@@ -2083,7 +2127,7 @@ class WalrusDirectClient {
     );
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(showEffects: true),
@@ -2118,7 +2162,7 @@ class WalrusDirectClient {
     );
     tx.setSender(signer.getAddress());
 
-    final result = await suiClient.signAndExecuteTransactionBlock(
+    final result = await _executeTransaction(
       signer,
       tx,
       responseOptions: SuiTransactionBlockResponseOptions(showEffects: true),
@@ -2170,7 +2214,15 @@ class WalrusDirectClient {
     String? walCoinObjectId,
     Map<String, String?>? attributes,
   }) async {
+    requireDeletableUpload(deletable);
+    if (_relayClient == null) _requireDirectSigning();
     final effectiveOwner = owner ?? signer.getAddress();
+    if (SuiBcs.Address.serialize(effectiveOwner).toHex() !=
+        SuiBcs.Address.serialize(signer.getAddress()).toHex()) {
+      throw ArgumentError(
+        'owner must be the signing address; transfer the Blob after certification',
+      );
+    }
 
     // Load tip config if needed.
     await _ensureTipConfig();
@@ -2273,18 +2325,20 @@ class WalrusDirectClient {
       resolvedCommittee.numShards,
     );
 
+    if (metadata != null &&
+        (metadata.blobId != encodedBlob.blobId ||
+            metadata.unencodedLength != blob.length ||
+            base64Encode(metadata.rootHash) !=
+                base64Encode(encodedBlob.rootHash))) {
+      throw ArgumentError(
+        'Precomputed metadata does not match the encoded blob',
+      );
+    }
+    _requireDirectCommittee(resolvedCommittee);
+
     final effectiveMetadata =
         metadata ??
-        BlobMetadata(
-          blobId: encodedBlob.blobId,
-          rootHash: encodedBlob.rootHash,
-          unencodedLength: encodedBlob.unencodedLength,
-          encodingType: kEncodingTypeRS2,
-          nonce: Uint8List(32),
-          blobDigest: Uint8List.fromList(
-            encodedBlob.rootHash, // Placeholder; will be refined.
-          ),
-        );
+        await blobEncoder.computeMetadata(blob, resolvedCommittee.numShards);
 
     // Step 2: Calculate storage costs.
     final costs = await storageCost(blob.length, epochs);
@@ -2331,7 +2385,7 @@ class WalrusDirectClient {
     // DEBUG: Dump transaction commands before submission.
     _debugDumpTransaction('_writeBlobDirect register', registerTx);
 
-    final registerResult = await suiClient.signAndExecuteTransactionBlock(
+    final registerResult = await _executeTransaction(
       signer,
       registerTx,
       responseOptions: SuiTransactionBlockResponseOptions(
@@ -2351,9 +2405,12 @@ class WalrusDirectClient {
     );
 
     // Step 6: Build certificate from confirmations.
-    final certificate = _buildCertificateFromConfirmations(
+    final certificate = buildCertificateFromConfirmations(
       confirmations: confirmations,
       committee: resolvedCommittee,
+      blobId: encodedBlob.blobId,
+      blobObjectId: blobObjectId,
+      deletable: deletable,
     );
 
     // Step 7: Certify on-chain.
@@ -2367,10 +2424,7 @@ class WalrusDirectClient {
       ),
     );
 
-    final certifyResult = await suiClient.signAndExecuteTransactionBlock(
-      signer,
-      certifyTx,
-    );
+    final certifyResult = await _executeTransaction(signer, certifyTx);
 
     // Step 8: Write blob attributes if provided.
     if (attributes != null && attributes.isNotEmpty) {
@@ -2402,91 +2456,55 @@ class WalrusDirectClient {
     Duration nodeTimeout = const Duration(seconds: 30),
     int maxConcurrency = 20,
   }) async {
+    requireDeletableUpload(deletable);
+    _requireDirectCommittee(committee);
+    if (maxConcurrency < 1) {
+      throw ArgumentError.value(maxConcurrency, 'maxConcurrency');
+    }
+    if (encodedBlob.primarySlivers.length != committee.numShards ||
+        encodedBlob.secondarySlivers.length != committee.numShards) {
+      throw ArgumentError(
+        'Encoded slivers do not match the active shard count',
+      );
+    }
     final confirmations = <int, StorageConfirmation?>{};
-    var failures = 0;
-
-    final shardIndices = committee.nodeByShardIndex.keys.toList()..sort();
-
-    // Process in batches to limit concurrency (like TS SDK's Promise.all
-    // with bounded parallelism).
-    for (var i = 0; i < shardIndices.length; i += maxConcurrency) {
-      final batchEnd = (i + maxConcurrency < shardIndices.length)
-          ? i + maxConcurrency
-          : shardIndices.length;
-      final batch = shardIndices.sublist(i, batchEnd);
-
-      final futures = <Future<MapEntry<int, StorageConfirmation?>>>[];
-
-      for (final shardIndex in batch) {
-        final node = committee.nodeByShardIndex[shardIndex];
-        if (node == null) {
-          failures++;
-          confirmations[shardIndex] = null;
-          continue;
-        }
-
-        final pairIndex = toPairIndex(
-          shardIndex,
-          encodedBlob.blobIdBytes,
-          committee.numShards,
-        );
-
-        if (pairIndex >= encodedBlob.primarySlivers.length ||
-            pairIndex >= encodedBlob.secondarySlivers.length) {
-          failures++;
-          confirmations[shardIndex] = null;
-          continue;
-        }
-
-        futures.add(
+    final nodes = committee.nodes;
+    var failedShards = 0;
+    for (var offset = 0; offset < nodes.length; offset += maxConcurrency) {
+      final end = (offset + maxConcurrency).clamp(0, nodes.length);
+      final results = await Future.wait([
+        for (var nodeIndex = offset; nodeIndex < end; nodeIndex++)
           _writeEncodedBlobToNode(
-            node: node,
-            blobId: encodedBlob.blobId,
-            metadata: encodedBlob.metadataBytes,
-            primarySliver: encodedBlob.primarySlivers[pairIndex],
-            secondarySliver: encodedBlob.secondarySlivers[pairIndex],
-            pairIndex: pairIndex,
-            deletable: deletable,
+            node: nodes[nodeIndex],
+            encodedBlob: encodedBlob,
+            committee: committee,
             blobObjectId: blobObjectId,
             timeout: nodeTimeout,
-          ).then(
-            (conf) => MapEntry(shardIndex, conf as StorageConfirmation?),
-            onError: (_) =>
-                MapEntry<int, StorageConfirmation?>(shardIndex, null),
+          ).then<MapEntry<int, StorageConfirmation?>>(
+            (confirmation) => MapEntry(nodeIndex, confirmation),
+            onError: (Object _) =>
+                MapEntry<int, StorageConfirmation?>(nodeIndex, null),
           ),
-        );
+      ]);
+      for (final result in results) {
+        confirmations[result.key] = result.value;
+        if (result.value == null) {
+          failedShards += nodes[result.key].shardIndices.length;
+        }
       }
-
-      // Await all writes in this batch concurrently.
-      final results = await Future.wait(futures);
-      for (final entry in results) {
-        confirmations[entry.key] = entry.value;
-        if (entry.value == null) failures++;
-      }
-
-      // Abort early if too many failures.
-      if (isAboveValidity(failures, committee.numShards)) {
+      if (isAboveValidity(failedShards, committee.numShards)) {
         throw NotEnoughBlobConfirmationsError(
-          'Too many storage node failures ($failures). '
-          'Cannot achieve quorum with ${committee.numShards} shards.',
+          'Storage writes failed for $failedShards/${committee.numShards} shards',
         );
       }
     }
-
     return confirmations;
   }
 
-  /// Write metadata + slivers to a single storage node and get confirmation.
-  ///
-  /// Mirrors the TS SDK's `writeEncodedBlobToNode()`.
   Future<StorageConfirmation> _writeEncodedBlobToNode({
     required StorageNodeInfo node,
-    required String blobId,
-    required Uint8List metadata,
-    required SliverData primarySliver,
-    required SliverData secondarySliver,
-    required int pairIndex,
-    required bool deletable,
+    required EncodedBlob encodedBlob,
+    required CommitteeInfo committee,
     required String blobObjectId,
     required Duration timeout,
   }) async {
@@ -2498,122 +2516,61 @@ class WalrusDirectClient {
         httpClient: _sharedHttpClient,
       ),
     );
-
-    // Step 1: Write metadata with retry on BlobNotRegisteredError.
-    // Storage nodes may not have indexed the blob registration yet,
-    // so retry up to 3 times with 1s delay (mirrors TS SDK behavior).
     await retry(
-      () => nodeClient.storeBlobMetadata(blobId: blobId, metadata: metadata),
+      () => nodeClient.storeBlobMetadata(
+        blobId: encodedBlob.blobId,
+        metadata: encodedBlob.metadataBytes,
+      ),
       count: 3,
-      delay: const Duration(milliseconds: 1000),
+      delay: const Duration(seconds: 1),
       condition: (e) => e is BlobNotRegisteredError,
     );
-
-    // Step 2: Write primary sliver.
-    await nodeClient.storeSliver(
-      blobId: blobId,
-      sliverPairIndex: pairIndex,
-      sliverType: SliverType.primary,
-      sliver: WalrusBlobEncoder.bcsSliverData(primarySliver),
-    );
-
-    // Step 3: Write secondary sliver.
-    await nodeClient.storeSliver(
-      blobId: blobId,
-      sliverPairIndex: pairIndex,
-      sliverType: SliverType.secondary,
-      sliver: WalrusBlobEncoder.bcsSliverData(secondarySliver),
-    );
-
-    // Step 4: Get confirmation.
-    if (deletable) {
-      return nodeClient.getDeletableBlobConfirmation(
-        blobId: blobId,
-        objectId: blobObjectId,
+    // A node confirms only after all of its assigned pairs have been stored.
+    for (final shardIndex in node.shardIndices) {
+      final pair = toPairIndex(
+        shardIndex,
+        encodedBlob.blobIdBytes,
+        committee.numShards,
       );
-    } else {
-      return nodeClient.getPermanentBlobConfirmation(blobId: blobId);
+      await nodeClient.storeSliver(
+        blobId: encodedBlob.blobId,
+        sliverPairIndex: pair,
+        sliverType: SliverType.primary,
+        sliver: WalrusBlobEncoder.bcsSliverData(
+          encodedBlob.primarySlivers[pair],
+        ),
+      );
+      await nodeClient.storeSliver(
+        blobId: encodedBlob.blobId,
+        sliverPairIndex: pair,
+        sliverType: SliverType.secondary,
+        sliver: WalrusBlobEncoder.bcsSliverData(
+          encodedBlob.secondarySlivers[pair],
+        ),
+      );
     }
+    return nodeClient.getDeletableBlobConfirmation(
+      blobId: encodedBlob.blobId,
+      objectId: blobObjectId,
+    );
   }
 
-  /// Build a [ProtocolMessageCertificate] from individual node confirmations.
-  ///
-  /// When a [BlsProvider] is configured, each confirmation is verified
-  /// against the corresponding node's public key (matching the TS SDK's
-  /// `getVerifySignature` pattern) and valid signatures are aggregated
-  /// via BLS12-381 `aggregate`. Without a provider, the first valid
-  /// signature is used as a fallback (relay mode or testing).
-  ProtocolMessageCertificate _buildCertificateFromConfirmations({
+  /// Verify the exact confirmation message and aggregate one signature per node.
+  ProtocolMessageCertificate buildCertificateFromConfirmations({
     required Map<int, StorageConfirmation?> confirmations,
     required CommitteeInfo committee,
+    required String blobId,
+    required String blobObjectId,
+    required bool deletable,
   }) {
-    final validSigners = <int>[];
-    final validSignatures = <Uint8List>[];
-    Uint8List? message;
-
-    for (final entry in confirmations.entries) {
-      final confirmation = entry.value;
-      if (confirmation == null) continue;
-
-      final sigBytes = base64Decode(confirmation.signature);
-      final msgBytes = confirmation.serializedMessage;
-
-      // When a BLS provider is available, verify each confirmation's
-      // signature against the node's public key before including it.
-      if (blsProvider != null) {
-        final node = committee.nodeByShardIndex[entry.key];
-        if (node != null &&
-            node.publicKey != null &&
-            node.publicKey!.isNotEmpty) {
-          final isValid = blsProvider!.verify(
-            sigBytes,
-            node.publicKey!,
-            msgBytes,
-          );
-          if (!isValid) {
-            // Skip invalid confirmations — matches TS SDK filter behavior.
-            continue;
-          }
-        }
-      }
-
-      validSigners.add(entry.key);
-      validSignatures.add(sigBytes);
-      message ??= msgBytes;
-    }
-
-    if (!isQuorum(validSigners.length, committee.numShards)) {
-      throw NotEnoughBlobConfirmationsError(
-        'Insufficient confirmations for quorum: '
-        '${validSigners.length}/${committee.numShards} '
-        '(need > ${2 * getMaxFaultyNodes(committee.numShards)})',
-      );
-    }
-
-    if (message == null) {
-      throw const NotEnoughBlobConfirmationsError(
-        'No valid confirmations received',
-      );
-    }
-
-    // Store raw signer indices (matching TS SDK convention).
-    // The indices→bitmap conversion happens in certifyBlobTransaction().
-
-    // Aggregate all valid signatures when BLS is available; otherwise
-    // fall back to the first valid signature (relay mode / testing).
-    final Uint8List signature;
-    if (blsProvider != null && validSignatures.length > 1) {
-      signature = blsProvider!.aggregate(validSignatures);
-    } else {
-      signature = validSignatures.isNotEmpty
-          ? validSignatures.first
-          : Uint8List(0);
-    }
-
-    return ProtocolMessageCertificate(
-      signers: validSigners,
-      serializedMessage: message,
-      signature: signature,
+    _requireDirectCommittee(committee);
+    return buildStorageCertificate(
+      confirmations: confirmations,
+      committee: committee,
+      provider: blsProvider!,
+      blobId: blobId,
+      blobObjectId: blobObjectId,
+      deletable: deletable,
     );
   }
 
@@ -2692,7 +2649,7 @@ class WalrusDirectClient {
     _debugDumpTransaction('_writeBlobViaRelay register', registerTx);
 
     // Step 2: Sign and execute register transaction.
-    final registerResult = await suiClient.signAndExecuteTransactionBlock(
+    final registerResult = await _executeTransaction(
       signer,
       registerTx,
       responseOptions: SuiTransactionBlockResponseOptions(
@@ -2723,10 +2680,7 @@ class WalrusDirectClient {
     // Resolve committee size for signers→bitmap conversion.
     final certCommitteeSize =
         _committee?.nodes.length ??
-        (relayResult.certificate.signers.isEmpty
-            ? 0
-            : relayResult.certificate.signers.reduce((a, b) => a > b ? a : b) +
-                  1);
+        (await _stateReader.systemState()).committeeSize;
     final certifyTx = txBuilder.certifyBlobTransaction(
       CertifyBlobOptions(
         blobId: metadata.blobId,
@@ -2737,10 +2691,7 @@ class WalrusDirectClient {
       ),
     );
 
-    final certifyResult = await suiClient.signAndExecuteTransactionBlock(
-      signer,
-      certifyTx,
-    );
+    final certifyResult = await _executeTransaction(signer, certifyTx);
 
     // Step 5: Write blob attributes if provided.
     if (attributes != null && attributes.isNotEmpty) {
@@ -2773,6 +2724,8 @@ class WalrusDirectClient {
     required Uint8List blob,
     BlobMetadata? metadata,
   }) async {
+    if (_relayClient == null) _requireDirectSigning();
+    final committee = _relayClient == null ? await getCommittee() : _committee;
     final txBuilder = await _ensureTxBuilder();
     await _ensureTipConfig();
 
@@ -2781,9 +2734,9 @@ class WalrusDirectClient {
       txBuilder: txBuilder,
       relayClient: _relayClient,
       tipConfig: _tipConfig,
-      encoder: encoder,
+      encoder: encoder ?? WalrusBlobEncoder(),
       precomputedMetadata: metadata,
-      committee: _committee,
+      committee: committee,
       directClient: _relayClient == null ? this : null,
       stateReader: _stateReader,
       suiClient: suiClient,
@@ -2803,6 +2756,7 @@ class WalrusDirectClient {
     required BigInt storageCost,
     required BigInt writeCost,
   }) async {
+    requireDeletableUpload(options.deletable);
     final txBuilder = await _ensureTxBuilder();
     final walType = await getWalType();
     final systemState = await _stateReader.systemState();
@@ -2873,6 +2827,72 @@ class WalrusDirectClient {
   // Helpers
   // -------------------------------------------------------------------------
 
+  /// Check direct-write cryptography before constructing a payable register
+  /// transaction. Flow constructors can be used independently of this client's
+  /// factories, so they call this guard again at registration.
+  void validateDirectWriteReadiness({CommitteeInfo? committee}) {
+    if (committee == null) {
+      _requireDirectSigning();
+    } else {
+      _requireDirectCommittee(committee);
+    }
+  }
+
+  void _requireDirectSigning() {
+    if (blsProvider == null) {
+      throw StateError(
+        'Direct writes require an initialized BlsProvider. Initialize '
+        'bls_dart RustLib and pass BlsDartProvider, or choose an upload relay.',
+      );
+    }
+    // An installed provider may still have an uninitialized native runtime.
+    // Probe it before registration can spend WAL; malformed signatures return
+    // false while missing runtimes throw.
+    blsProvider!.verify(Uint8List(96), Uint8List(48), Uint8List(0));
+  }
+
+  void _requireDirectCommittee(CommitteeInfo committee) {
+    _requireDirectSigning();
+    if (committee.nodes.isEmpty ||
+        committee.nodeByShardIndex.length != committee.numShards) {
+      throw StateError('Direct writes require the complete active committee');
+    }
+    if (committee.nodes.any(
+      (node) => node.publicKey?.length != 48 && node.publicKey?.length != 96,
+    )) {
+      throw StateError(
+        'Direct writes require each committee member BLS public key',
+      );
+    }
+  }
+
+  Future<SuiTransactionBlockResponse> _executeTransaction(
+    SuiAccount signer,
+    Transaction transaction, {
+    SuiTransactionBlockResponseOptions? responseOptions,
+  }) async {
+    final result = await suiClient.signAndExecuteTransactionBlock(
+      signer,
+      transaction,
+      responseOptions:
+          responseOptions ??
+          SuiTransactionBlockResponseOptions(
+            showEffects: true,
+            showObjectChanges: true,
+          ),
+    );
+    if ((result.effects != null &&
+            result.effects!.status.status != ExecutionStatusType.success) ||
+        (result.effects == null && result.confirmedLocalExecution != true) ||
+        (result.errors?.isNotEmpty ?? false)) {
+      throw WalrusClientError(
+        'Transaction ${result.digest} did not succeed: '
+        '${result.effects?.status.error ?? result.errors}',
+      );
+    }
+    return result;
+  }
+
   /// Debug: dump all commands in a transaction before submission.
   void _debugDumpTransaction(String label, Transaction tx) {
     if (!WalrusLogLevel.debug.isEnabledFor(logger.level)) return;
@@ -2921,26 +2941,15 @@ class WalrusDirectClient {
         if (change is Map &&
             change['type'] == 'created' &&
             change['objectType'] != null &&
-            change['objectType'].toString().contains('::blob::Blob')) {
+            change['objectType'].toString().endsWith('::blob::Blob')) {
           return change['objectId'] as String;
         }
       }
     }
 
-    // Fallback: try from effects.created
-    final effects = txResult.effects;
-    if (effects != null) {
-      final created = effects.created;
-      if (created != null && created is List && created.isNotEmpty) {
-        return created.first['reference']?['objectId']?.toString() ??
-            created.first['objectId']?.toString() ??
-            '';
-      }
-    }
-
     throw WalrusClientError(
       'Could not extract Blob object ID from transaction effects. '
-      'Ensure showObjectChanges and showEffects are enabled.',
+      'Ensure showObjectChanges is enabled and contains the expected created type.',
     );
   }
 
@@ -2955,26 +2964,17 @@ class WalrusDirectClient {
         if (change is Map &&
             change['type'] == 'created' &&
             change['objectType'] != null &&
-            change['objectType'].toString().contains(typeSuffix)) {
+            change['objectType'].toString().endsWith(
+              '::storage_resource::$typeSuffix',
+            )) {
           return change['objectId'] as String;
         }
       }
     }
 
-    // Fallback: try from effects.created (return first created).
-    final effects = txResult.effects;
-    if (effects != null) {
-      final created = effects.created;
-      if (created != null && created is List && created.isNotEmpty) {
-        return created.first['reference']?['objectId']?.toString() ??
-            created.first['objectId']?.toString() ??
-            '';
-      }
-    }
-
     throw WalrusClientError(
       'Could not extract $typeSuffix object ID from transaction effects. '
-      'Ensure showObjectChanges and showEffects are enabled.',
+      'Ensure showObjectChanges is enabled and contains the expected created type.',
     );
   }
 

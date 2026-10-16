@@ -17,6 +17,9 @@ import 'dart:typed_data';
 import 'package:sui/sui.dart';
 
 import '../chain/system_state_reader.dart';
+import '../chain/write_flow_verification.dart';
+import '../utils/upload_policy.dart';
+import 'walrus_direct_client.dart';
 import '../contracts/transaction_builder.dart';
 import '../encoding/blob_encoder.dart';
 import '../encoding/walrus_blob_encoder.dart';
@@ -137,7 +140,7 @@ class WriteFilesFlow {
 
   // Direct mode.
   final CommitteeInfo? _committee;
-  final dynamic _directClient;
+  final WalrusDirectClient? _directClient;
 
   // On-chain state reader.
   final SystemStateReader? _stateReader;
@@ -150,6 +153,9 @@ class WriteFilesFlow {
   Uint8List? _quiltBytes;
   QuiltIndex? _quiltIndex;
   BlobMetadata? _metadata;
+  int? _committeeSize;
+  String? _blobType;
+  String? _owner;
   int? _shardCount; // Shard count the quilt was encoded for.
   EncodedBlob? _encodedBlob;
   String? _blobObjectId;
@@ -163,10 +169,10 @@ class WriteFilesFlow {
     UploadRelayTipConfig? tipConfig,
     BlobEncoder? encoder,
     CommitteeInfo? committee,
-    dynamic directClient,
+    WalrusDirectClient? directClient,
     SystemStateReader? stateReader,
     SuiClient? suiClient,
-  }) : _files = files,
+  }) : _files = List.unmodifiable(files),
        _txBuilder = txBuilder,
        _relayClient = relayClient,
        _tipConfig = tipConfig,
@@ -240,6 +246,39 @@ class WriteFilesFlow {
       throw StateError('Must call encode() before register()');
     }
 
+    requireDeletableUpload(options.deletable);
+    if (_relayClient == null &&
+        (_encodedBlob == null || _directClient == null)) {
+      throw StateError(
+        "Direct writes require fully encoded slivers before registration",
+      );
+    }
+    if (_relayClient == null) {
+      _directClient!.validateDirectWriteReadiness(committee: _committee);
+    }
+    _committeeSize = _committee?.nodes.length;
+    if (_stateReader != null) {
+      final state = await _stateReader.systemState();
+      _committeeSize = state.committeeSize;
+      if (_shardCount != null && _shardCount != state.nShards) {
+        throw StateError(
+          'Shard count changed; create and encode a fresh flow before registering',
+        );
+      }
+    }
+    final reader =
+        _stateReader ??
+        (_suiClient == null
+            ? null
+            : SystemStateReader(
+                suiClient: _suiClient,
+                config: _txBuilder.packageConfig,
+              ));
+    if (reader == null) {
+      throw StateError('A chain client is required to verify the flow');
+    }
+    _blobType = '${await reader.getPackageId()}::blob::Blob';
+    _owner = options.owner;
     _deletable = options.deletable;
     final metadata = _metadata!;
     final quiltBytes = _quiltBytes!;
@@ -346,10 +385,24 @@ class WriteFilesFlow {
     // Resolve the Blob Sui object ID.
     _blobObjectId = _resolveBlobObjectId(options);
 
+    if (_suiClient == null) {
+      throw StateError('A chain client is required to verify registration');
+    }
+    await verifyFlowBlob(
+      client: _suiClient,
+      objectId: _blobObjectId!,
+      blobId: metadata.blobId,
+      blobType: _blobType!,
+      size: metadata.unencodedLength,
+      deletable: _deletable,
+      owner: _owner!,
+      certified: false,
+      digest: options.digest,
+    );
+
     if (_relayClient != null) {
       // Wait for register tx to be indexed before contacting relay.
       // Mirrors TS SDK's waitForTransaction before writeBlobToUploadRelay.
-      await _suiClient!.waitForTransaction(options.digest);
 
       final result = await _relayClient.writeBlob(
         blobId: metadata.blobId,
@@ -366,21 +419,20 @@ class WriteFilesFlow {
         _committee != null &&
         _encodedBlob != null) {
       final client = _directClient;
-      final confirmations =
-          await client.writeEncodedBlobToNodes(
-                encodedBlob: _encodedBlob,
-                committee: _committee,
-                deletable: _deletable,
-                blobObjectId: _blobObjectId ?? '',
-              )
-              as Map<int, StorageConfirmation?>;
+      final confirmations = await client.writeEncodedBlobToNodes(
+        encodedBlob: _encodedBlob!,
+        committee: _committee,
+        deletable: _deletable,
+        blobObjectId: _blobObjectId ?? '',
+      );
 
-      _certificate =
-          client._buildCertificateFromConfirmations(
-                confirmations: confirmations,
-                committee: _committee,
-              )
-              as ProtocolMessageCertificate;
+      _certificate = client.buildCertificateFromConfirmations(
+        confirmations: confirmations,
+        committee: _committee,
+        blobId: metadata.blobId,
+        blobObjectId: _blobObjectId!,
+        deletable: _deletable,
+      );
     } else {
       throw StateError(
         'No relay client or direct mode configuration available.',
@@ -401,11 +453,12 @@ class WriteFilesFlow {
     }
 
     // Determine committee size for signers→bitmap conversion.
-    final committeeSize =
-        _committee?.nodes.length ??
-        ((_certificate!.signers.isEmpty
-            ? 0
-            : _certificate!.signers.reduce((a, b) => a > b ? a : b) + 1));
+    final committeeSize = _committeeSize ?? _committee?.nodes.length ?? 0;
+    if (committeeSize <= 0) {
+      throw StateError(
+        'The complete chain committee size is required to certify',
+      );
+    }
 
     final tx = _txBuilder.certifyBlobTransaction(
       CertifyBlobOptions(
@@ -422,11 +475,25 @@ class WriteFilesFlow {
   }
 
   /// Step 5: Get the final file results with patch IDs.
-  Future<List<WriteFileResult>> listFiles() async {
+  Future<List<WriteFileResult>> listFiles({String? certifyDigest}) async {
     if (_step != _WriteFilesFlowStep.certified) {
       throw StateError('Must call certify() before listFiles()');
     }
 
+    if (_suiClient == null) {
+      throw StateError('A chain client is required to verify certification');
+    }
+    await verifyFlowBlob(
+      client: _suiClient,
+      objectId: _blobObjectId!,
+      blobId: _metadata!.blobId,
+      blobType: _blobType!,
+      size: _metadata!.unencodedLength,
+      deletable: _deletable,
+      owner: _owner!,
+      certified: true,
+      digest: certifyDigest,
+    );
     final metadata = _metadata!;
     final index = _quiltIndex!;
 
@@ -470,20 +537,8 @@ class WriteFilesFlow {
         if (change is Map &&
             change['type'] == 'created' &&
             change['objectType'] != null &&
-            change['objectType'].toString().contains('::blob::Blob')) {
+            change['objectType'].toString().endsWith('::blob::Blob')) {
           return change['objectId'] as String;
-        }
-      }
-    }
-
-    final effects = txResult['effects'];
-    if (effects is Map) {
-      final created = effects['created'];
-      if (created is List && created.isNotEmpty) {
-        final first = created.first;
-        if (first is Map) {
-          final objId = first['reference']?['objectId'] ?? first['objectId'];
-          if (objId != null) return objId.toString();
         }
       }
     }

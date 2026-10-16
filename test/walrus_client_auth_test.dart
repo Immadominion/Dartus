@@ -140,7 +140,7 @@ void main() {
     test('builds query with all parameters', () async {
       server.handleNext((request) {
         expect(request.uri.queryParameters['epochs'], equals('5'));
-        expect(request.uri.queryParameters['deletable'], equals('false'));
+        expect(request.uri.queryParameters['deletable'], equals('true'));
         expect(request.uri.queryParameters['send_object_to'], equals('0xabc'));
         return MockResponse(200, jsonEncode({'status': 'ok'}));
       });
@@ -148,7 +148,7 @@ void main() {
       await client.putBlob(
         data: Uint8List.fromList([1, 2, 3]),
         epochs: 5,
-        deletable: false,
+        deletable: true,
         sendObjectTo: '0xabc',
       );
     });

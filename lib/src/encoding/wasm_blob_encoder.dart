@@ -62,14 +62,19 @@ class WasmBlobEncoder extends BlobEncoder {
 
   @override
   Future<BlobMetadata> computeMetadata(Uint8List data, int numShards) async {
-    final (blobId, rootHash) = await _worker.compute(data, numShards);
+    // Unmodifiable Uint8List views (including wallet-flow snapshots) cannot
+    // be converted directly with toJS. Keep a normal snapshot for both
+    // computations; the worker transfers its own copy, leaving this one
+    // attached and available to WebCrypto.
+    final bytes = Uint8List.fromList(data);
+    final (blobId, rootHash) = await _worker.compute(bytes, numShards);
     return BlobMetadata(
       blobId: blobIdFromBytes(blobId),
       rootHash: rootHash,
-      unencodedLength: data.length,
+      unencodedLength: bytes.length,
       encodingType: kEncodingTypeRS2,
       nonce: _randomBytes(32),
-      blobDigest: await _sha256(data),
+      blobDigest: await _sha256(bytes),
     );
   }
 

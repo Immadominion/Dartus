@@ -10,6 +10,7 @@ publish = false
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
+bcs = "0.1.6"
 # Use the official walrus-core crate directly — same approach as the TS SDK's
 # walrus-wasm bridge. This guarantees bit-identical blob IDs, Merkle roots,
 # and slivers with the Walrus network.

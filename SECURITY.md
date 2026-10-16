@@ -1,12 +1,12 @@
 # Security
 
-This document describes current source behavior and known limits of Dartus, reviewed on **October 9, 2026**. Local changes may differ from the published package. It is not an independent security audit or certification of mainnet readiness.
+This document describes current source behavior and known limits of Dartus, reviewed on **October 16, 2026**. Local changes may differ from the published package. It is not an independent security audit or certification of mainnet readiness.
 
 ## Report a vulnerability privately
 
 Email the maintainer at **[immadominion@gmail.com](mailto:immadominion@gmail.com)** with a description, affected version or commit, reproduction steps, and likely impact. Omit wallet secrets, real credentials, and other users' private data.
 
-Do not put private vulnerability details in a public GitHub issue. GitHub private vulnerability reporting is not enabled for this repository as of the review date. No response-time commitment is claimed here.
+Do not put private vulnerability details in a public GitHub issue. No response-time commitment is claimed here.
 
 ## Transport behavior
 
@@ -14,15 +14,17 @@ Do not put private vulnerability details in a public GitHub issue. GitHub privat
 |------|------------------|
 | Default `WalrusClient` over HTTPS | Uses `package:http` with platform certificate validation. `useSecureConnection` is a compatibility no-op, regardless of its value. |
 | Injected `WalrusClient.httpClient` | Uses the supplied client's transport and certificate policy. Dartus cannot establish its safety. |
-| `WalrusDirectClient` storage-node connections | Its shared `HttpClient` accepts invalid certificates through `badCertificateCallback`, leaving these connections vulnerable to interception. |
+| `WalrusDirectClient` storage-node connections | Uses platform certificate validation; the former permissive callback has been removed. Default chain operations use Sui gRPC. |
 | Standalone `StorageNodeClient` | Its own default `HttpClient` keeps normal certificate checks. A supplied client may use a different policy. |
 | `UploadRelayClient` and `WalrusWriter` | `package:http` with platform certificate validation (the browser on the web). An injected `http.Client` sets its own policy. Chain reads use `package:sui`'s gRPC-web client over HTTPS. |
 
-The SDK accepts HTTP URLs too; certificate validation does not make an HTTP URL encrypted. Use HTTPS for remote services. The HTTP compatibility flag does not change the direct client's insecure certificate behavior.
+The SDK accepts HTTP URLs too; certificate validation does not make an HTTP URL encrypted. Use HTTPS for remote services.
 
 `WalrusWriter` hands wallets a transaction to approve; the wallet shows the person what they pay and signs it, and Dartus never holds the person's key. It checks effects and reads the certified Blob object back, but servers that list wallet-stored files must still verify the Blob object on chain themselves. `KeypairTransactionSigner` holds a key in memory and is meant for scripts and tests.
 
-Direct operation also needs further validation of its Sui transport, registration/certification flow, BLS configuration, and encoded metadata. API examples and unit tests do not establish that those paths can safely complete a mainnet upload.
+Direct uploads require a BLS provider before payment, verify confirmations against committee keys and the exact epoch/blob/object message, and count each committee node once with its shard weight for quorum. Native metadata comes from walrus-core, including its actual per-pair hashes. The full live direct-write path still needs acceptance testing; these source changes and local checks do not establish a successful mainnet upload.
+
+Wallet writes block concurrent calls. If submission throws without a reliable rejection or a returned digest, the flow reports `WalrusTransactionOutcomeUnknown` and blocks a second payment. Recover using the original digest, or confirm that the original request cannot succeed before resetting. Never classify timeouts or generic error text as a definite rejection. Flow state is not persisted across reloads/restarts. Optional `maxRelayTip` limits the relay fee, not WAL or gas.
 
 ## Authentication and logs
 
@@ -35,7 +37,8 @@ Do not place private publisher credentials in a browser bundle. An injected HTTP
 - Native cache filenames are SHA-256 hashes **of blob IDs**. This prevents blob IDs becoming file paths, but is not content verification or encryption. Hashes are deterministic, not secret.
 - Cache data is plaintext. Use a directory accessible only to the intended OS user for sensitive application data. Caller-provided output paths and cache directories are trusted inputs; this is not a filesystem sandbox.
 - `cacheMaxSize` limits entries, **not total bytes**. A single blob may still be large. Byte-oriented downloads retain the complete payload in memory.
-- `getBlobAsFileStreaming` bypasses the byte cache and writes to a temporary file, replacing the destination after success. Failed downloads discard partial output. This limits application buffering but does not impose a maximum download size or disk quota.
+- `getBlobAsFileStreaming` bypasses the byte cache and stages output before replacement. Existing symlinks resolve to regular files and remain intact; permission bits are checked before replacement. Copying an existing file to preserve those bits requires read access and temporary disk space. Ownership, ACLs and hard-link identity are not preserved. Same-filesystem replacement is atomic on POSIX; callers must prevent concurrent path mutations.
+- Failed downloads preserve the existing destination. Temporary cleanup is best effort; crash residue requires manual cleanup. No automatic sweep deletes directories by prefix or age. Streaming limits application buffering, not total disk use.
 - Cache operations are serialized within one instance. Do not share a cache directory between independent instances. Temporary directories are removed on disposal; explicitly supplied directories remain.
 
 ## Timeouts
@@ -48,9 +51,9 @@ This contract applies to the HTTP publisher/aggregator client. It should not be 
 
 Do not treat a blob ID as an access-control secret. Walrus storage is not confidential by default; encrypt sensitive content before upload and manage the keys outside the blob. A publisher or storage endpoint can observe the bytes you send unless your application encrypts them first.
 
-HTTP upload methods currently default to `deletable: true`, but permit callers to pass `false`. Direct write APIs require an explicit deletion choice and also accept `false`. The SDK therefore **does not enforce a deletable-only policy**. A default value alone does not establish grant compliance.
+Upload entry points and registration builders reject `deletable: false` before submission. HTTP uploads always request `deletable=true`; native and wallet writes enforce the same restriction. This is a breaking change in the local 0.4.0 candidate. Reading existing non-deletable blobs remains supported.
 
-Deletable means the blob can be removed through the relevant protocol operation; it does not automatically schedule deletion or remove copies already downloaded by others. Changing the defaults or enforcing a restriction requires a coordinated behavior and release decision.
+Deletable means the blob can be removed through the relevant protocol operation; it does not automatically schedule deletion or remove copies already downloaded by others.
 
 ## What the checks establish
 
@@ -62,7 +65,7 @@ dart analyze --fatal-infos
 dart format --output=none --set-exit-if-changed lib test live_test tool
 ```
 
-Default tests use injected fixtures or loopback HTTP services. Optional live checks are separate; see [CONTRIBUTING.md](CONTRIBUTING.md). Browser checks cover the HTTP byte API and memory cache in Chrome JavaScript, not direct/FFI operation or WebAssembly.
+Default tests use injected fixtures or loopback HTTP services. Optional live checks are separate; see [CONTRIBUTING.md](CONTRIBUTING.md). Chrome JavaScript checks cover the HTTP byte API, memory cache and the WASM encoder in a Web Worker. They do not cover the dart2wasm build, live browser wallet approvals, or direct/FFI operation.
 
 Tests establish behavior for their fixtures. Static analysis checks types and lints. `flutter pub outdated` reports available dependency versions; it is **not** a vulnerability audit. These checks do not demonstrate absence of vulnerabilities, full protocol verification, or legal compliance.
 

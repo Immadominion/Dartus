@@ -37,13 +37,15 @@ Native encoding and the complete test suite require the Rust FFI library built f
 bash native/build.sh release
 ```
 
+Rebuild after upgrading to 0.4.0; the old library lacks `walrus_encode_blob_v2`.
+
 The loader finds the library under `native/walrus_ffi/target/release/`. `WALRUS_FFI_LIB` can select an explicit library path. A macOS `.dylib` cannot satisfy Linux's `.so` requirement; CI builds the Linux library before running the full suite. HTTP-only fixture tests and browser tests do not require the native encoder. An unavailable encoder does not fall back to a protocol-compatible Dart implementation.
 
 ## Architecture
 
 ```
 lib/
-  dartus.dart              # HTTP client and shared public types
+  dartus.dart              # HTTP client, wallet writes and shared types
   direct.dart              # Direct client, write flows, native encoding
   src/
     cache/                 # Disk cache on native; memory cache on web
@@ -88,7 +90,7 @@ flutter test test/blob_cache_test.dart --reporter expanded
 flutter test --no-pub
 
 # Browser runtime checks (JavaScript, requires Chrome)
-flutter test --no-pub --platform chrome test/browser/http_browser_test.dart test/cache_regression_test.dart
+flutter test --no-pub --platform chrome test/browser/ test/cache_regression_test.dart
 ```
 
 Use Flutter for the full suite: direct-mode dependencies require `dart:ui`. `dart test` alone is not the full validation command.
@@ -106,6 +108,24 @@ The upload check requires `DARTUS_LIVE_PUBLISHER`, `DARTUS_LIVE_AGGREGATOR`, and
 ```bash
 flutter test --no-pub live_test/http_live_upload_test.dart --tags live-write
 ```
+
+A read-only native gRPC smoke check reads system state, committee and pricing from
+both public network presets. It performs no transactions:
+
+```bash
+DARTUS_RUN_LIVE_READS=true flutter test --no-pub live_test/direct_grpc_read_test.dart
+```
+
+An optional native BLS check uses deterministic public signature fixtures and
+requires the separate `bls_dart` native library (it makes no network requests):
+
+```bash
+DARTUS_BLS_LIBRARY=/absolute/path/to/libbls_dart.dylib \
+  flutter test --no-pub live_test/native_bls_provider_test.dart
+```
+
+Use the appropriate library filename for your platform. This is separate from
+Dartus's `libwalrus_ffi` encoder library.
 
 The wallet write check spends WAL and SUI from a throwaway key (`DARTUS_RUN_LIVE_WRITES=true`, `DARTUS_LIVE_ED25519_SEED`, optional `DARTUS_LIVE_NETWORK`):
 
@@ -147,7 +167,7 @@ chore: update bls_dart dependency to published version
    dart format --output=none --set-exit-if-changed lib test live_test tool
    dart analyze --fatal-infos
    flutter test --no-pub
-   flutter test --no-pub --platform chrome test/browser/http_browser_test.dart test/cache_regression_test.dart
+   flutter test --no-pub --platform chrome test/browser/ test/cache_regression_test.dart
    ```
    Report exact commands and any failures. Run live tests only when deliberately validating that network behavior.
 5. Commit with clear messages.

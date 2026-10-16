@@ -122,28 +122,34 @@ void main() {
       expect(result.certificate.signature, List<int>.filled(96, 251));
     });
 
-    test('leaves out tip and object parameters when not needed', () async {
-      late Uri sent;
-      final relay = UploadRelayClient(
-        host: 'https://relay.test',
-        httpClient: MockClient((request) async {
-          sent = request.url;
-          return http.Response(
-            jsonEncode({'confirmation_certificate': certificate}),
-            200,
-          );
-        }),
-      );
-      await relay.writeBlob(
-        blobId: 'blob-id',
-        blob: Uint8List(1),
-        nonce: Uint8List(32),
-        txDigest: 'digest',
-        blobObjectId: '0xb10b',
-        deletable: false,
-      );
-      expect(sent.queryParameters, {'blob_id': 'blob-id'});
-    });
+    test(
+      'omits tip parameters but retains deletable object without a tip',
+      () async {
+        late Uri sent;
+        final relay = UploadRelayClient(
+          host: 'https://relay.test',
+          httpClient: MockClient((request) async {
+            sent = request.url;
+            return http.Response(
+              jsonEncode({'confirmation_certificate': certificate}),
+              200,
+            );
+          }),
+        );
+        await relay.writeBlob(
+          blobId: 'blob-id',
+          blob: Uint8List(1),
+          nonce: Uint8List(32),
+          txDigest: 'digest',
+          blobObjectId: '0xb10b',
+          deletable: true,
+        );
+        expect(sent.queryParameters, {
+          'blob_id': 'blob-id',
+          'deletable_blob_object': '0xb10b',
+        });
+      },
+    );
 
     test('a refusal becomes an UploadRelayError with the reason', () async {
       Object? reported;

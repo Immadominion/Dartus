@@ -19,6 +19,9 @@ import 'dart:typed_data';
 import 'package:sui/sui.dart';
 
 import '../chain/system_state_reader.dart';
+import '../chain/write_flow_verification.dart';
+import '../utils/upload_policy.dart';
+import 'walrus_direct_client.dart';
 import '../contracts/transaction_builder.dart';
 import '../encoding/blob_encoder.dart';
 import '../encoding/walrus_blob_encoder.dart';
@@ -156,7 +159,7 @@ class WriteBlobFlow {
 
   // Direct mode (Phase 3).
   final CommitteeInfo? _committee;
-  final dynamic _directClient; // WalrusDirectClient (avoids circular import)
+  final WalrusDirectClient? _directClient;
 
   // On-chain state reader for WAL payment resolution.
   final SystemStateReader? _stateReader;
@@ -167,6 +170,9 @@ class WriteBlobFlow {
   // State
   _FlowStep _step = _FlowStep.initial;
   BlobMetadata? _metadata;
+  int? _committeeSize;
+  String? _blobType;
+  String? _owner;
   int? _shardCount; // Shard count the metadata was computed for.
   EncodedBlob? _encodedBlob;
   String? _blobObjectId;
@@ -182,10 +188,10 @@ class WriteBlobFlow {
     int? numShards,
     BlobMetadata? precomputedMetadata,
     CommitteeInfo? committee,
-    dynamic directClient,
+    WalrusDirectClient? directClient,
     SystemStateReader? stateReader,
     SuiClient? suiClient,
-  }) : _blob = blob,
+  }) : _blob = Uint8List.fromList(blob),
        _txBuilder = txBuilder,
        _relayClient = relayClient,
        _tipConfig = tipConfig,
@@ -208,7 +214,7 @@ class WriteBlobFlow {
       throw StateError('encode() already called');
     }
 
-    if (_precomputedMetadata != null) {
+    if (_precomputedMetadata != null && _relayClient != null) {
       _metadata = _precomputedMetadata;
     } else if (_relayClient != null) {
       // Relay mode: use computeMetadata() which generates a random nonce
@@ -260,6 +266,13 @@ class WriteBlobFlow {
       );
     }
 
+    if (_precomputedMetadata != null &&
+        (_precomputedMetadata.blobId != _metadata!.blobId ||
+            _precomputedMetadata.unencodedLength != _blob.length ||
+            _precomputedMetadata.rootHash.toString() !=
+                _metadata!.rootHash.toString())) {
+      throw ArgumentError('Precomputed metadata does not match encoded blob');
+    }
     _step = _FlowStep.encoded;
   }
 
@@ -282,6 +295,39 @@ class WriteBlobFlow {
       throw StateError('Must call encode() before register()');
     }
 
+    requireDeletableUpload(options.deletable);
+    if (_relayClient == null &&
+        (_encodedBlob == null || _directClient == null)) {
+      throw StateError(
+        "Direct writes require fully encoded slivers before registration",
+      );
+    }
+    if (_relayClient == null) {
+      _directClient!.validateDirectWriteReadiness(committee: _committee);
+    }
+    _committeeSize = _committee?.nodes.length;
+    if (_stateReader != null) {
+      final state = await _stateReader.systemState();
+      _committeeSize = state.committeeSize;
+      if (_shardCount != null && _shardCount != state.nShards) {
+        throw StateError(
+          'Shard count changed; create and encode a fresh flow before registering',
+        );
+      }
+    }
+    final reader =
+        _stateReader ??
+        (_suiClient == null
+            ? null
+            : SystemStateReader(
+                suiClient: _suiClient,
+                config: _txBuilder.packageConfig,
+              ));
+    if (reader == null) {
+      throw StateError('A chain client is required to verify the flow');
+    }
+    _blobType = '${await reader.getPackageId()}::blob::Blob';
+    _owner = options.owner;
     _deletable = options.deletable;
     final metadata = _metadata!;
 
@@ -394,13 +440,27 @@ class WriteBlobFlow {
     // Resolve the Blob Sui object ID.
     _blobObjectId = _resolveBlobObjectId(options);
 
+    if (_suiClient == null) {
+      throw StateError('A chain client is required to verify registration');
+    }
+    await verifyFlowBlob(
+      client: _suiClient,
+      objectId: _blobObjectId!,
+      blobId: metadata.blobId,
+      blobType: _blobType!,
+      size: metadata.unencodedLength,
+      deletable: _deletable,
+      owner: _owner!,
+      certified: false,
+      digest: options.digest,
+    );
+
     if (_relayClient != null) {
       // Relay mode: upload to relay.
       //
       // We must wait for the register transaction to be indexed so the relay
       // can verify the on-chain registration and payment.
       // Mirrors TS SDK's `client.waitForTransaction({ digest })`.
-      await _suiClient!.waitForTransaction(options.digest);
 
       final relay = _relayClient;
       final result = await relay.writeBlob(
@@ -420,22 +480,21 @@ class WriteBlobFlow {
       // Direct mode (Phase 3): write slivers to storage nodes.
       // Use the WalrusDirectClient's writeEncodedBlobToNodes method.
       final client = _directClient;
-      final confirmations =
-          await client.writeEncodedBlobToNodes(
-                encodedBlob: _encodedBlob,
-                committee: _committee,
-                deletable: _deletable,
-                blobObjectId: _blobObjectId ?? '',
-              )
-              as Map<int, StorageConfirmation?>;
+      final confirmations = await client.writeEncodedBlobToNodes(
+        encodedBlob: _encodedBlob!,
+        committee: _committee,
+        deletable: _deletable,
+        blobObjectId: _blobObjectId ?? '',
+      );
 
       // Build certificate from confirmations.
-      _certificate =
-          client._buildCertificateFromConfirmations(
-                confirmations: confirmations,
-                committee: _committee,
-              )
-              as ProtocolMessageCertificate;
+      _certificate = client.buildCertificateFromConfirmations(
+        confirmations: confirmations,
+        committee: _committee,
+        blobId: metadata.blobId,
+        blobObjectId: _blobObjectId!,
+        deletable: _deletable,
+      );
     } else {
       throw StateError(
         'No relay client or direct mode configuration available. '
@@ -459,13 +518,13 @@ class WriteBlobFlow {
     }
 
     // Determine committee size for signers→bitmap conversion.
-    // Prefer committee info if available; otherwise infer from the
-    // certificate's signer indices (max index + 1, rounded to byte).
-    final committeeSize =
-        _committee?.nodes.length ??
-        ((_certificate!.signers.isEmpty
-            ? 0
-            : _certificate!.signers.reduce((a, b) => a > b ? a : b) + 1));
+    // Include non-signers so the bitmap spans the complete committee.
+    final committeeSize = _committeeSize ?? _committee?.nodes.length ?? 0;
+    if (committeeSize <= 0) {
+      throw StateError(
+        'The complete chain committee size is required to certify',
+      );
+    }
 
     final tx = _txBuilder.certifyBlobTransaction(
       CertifyBlobOptions(
@@ -482,15 +541,31 @@ class WriteBlobFlow {
   }
 
   /// Step 5: Get the final blob result.
-  Future<WriteBlobResult> getBlob() async {
+  Future<WriteBlobResult> getBlob({String? certifyDigest}) async {
     if (_step != _FlowStep.certified) {
       throw StateError('Must call certify() before getBlob()');
     }
 
+    if (_suiClient == null) {
+      throw StateError('A chain client is required to verify certification');
+    }
+    await verifyFlowBlob(
+      client: _suiClient,
+      objectId: _blobObjectId!,
+      blobId: _metadata!.blobId,
+      blobType: _blobType!,
+      size: _metadata!.unencodedLength,
+      deletable: _deletable,
+      owner: _owner!,
+      certified: true,
+      digest: certifyDigest,
+    );
     return WriteBlobResult(
       blobId: _metadata!.blobId,
       blobObjectId: _blobObjectId!,
-      certifyDigest: '', // Populated after certify tx is signed
+      certifyDigest:
+          certifyDigest ??
+          '', // No digest is invented for chain-only verification.
     );
   }
 
@@ -528,28 +603,15 @@ class WriteBlobFlow {
         if (change is Map &&
             change['type'] == 'created' &&
             change['objectType'] != null &&
-            change['objectType'].toString().contains('::blob::Blob')) {
+            change['objectType'].toString().endsWith('::blob::Blob')) {
           return change['objectId'] as String;
-        }
-      }
-    }
-
-    // Fallback: effects.created
-    final effects = txResult['effects'];
-    if (effects is Map) {
-      final created = effects['created'];
-      if (created is List && created.isNotEmpty) {
-        final first = created.first;
-        if (first is Map) {
-          final objId = first['reference']?['objectId'] ?? first['objectId'];
-          if (objId != null) return objId.toString();
         }
       }
     }
 
     throw ArgumentError(
       'Could not extract Blob object ID from transaction result. '
-      'Ensure showObjectChanges or showEffects is enabled when executing '
+      'Ensure showObjectChanges is enabled when executing '
       'the transaction.',
     );
   }

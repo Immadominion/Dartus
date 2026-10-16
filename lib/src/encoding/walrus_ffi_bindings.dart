@@ -62,6 +62,9 @@ class WalrusFfiBindings {
     Pointer<Uint8> outRootHash,
     Pointer<Uint64> outUnencodedLength,
     Pointer<Uint8> outEncodingType,
+    Pointer<Uint8> outMetadata,
+    int metadataCapacity,
+    Pointer<IntPtr> outMetadataLength,
   )
   _encodeBlob;
 
@@ -192,9 +195,12 @@ class WalrusFfiBindings {
               Pointer<Uint8>,
               Pointer<Uint64>,
               Pointer<Uint8>,
+              Pointer<Uint8>,
+              IntPtr,
+              Pointer<IntPtr>,
             )
           >
-        >('walrus_encode_blob')
+        >('walrus_encode_blob_v2')
         .asFunction();
 
     _decodeBlob = _lib
@@ -344,12 +350,22 @@ class WalrusFfiBindings {
   // Public API
   // ---------------------------------------------------------------------------
 
+  static void _checkDimensions(int nShards, int size) {
+    if (nShards < 1 || nShards > 65535) {
+      throw ArgumentError.value(nShards, 'nShards', 'Must fit a non-zero u16');
+    }
+    if (size < 0) {
+      throw ArgumentError.value(size, 'size', 'Must not be negative');
+    }
+  }
+
   /// Compute blob metadata (blob ID, root hash) without returning slivers.
   ///
   /// Used for the upload-relay path where the relay handles actual encoding.
   /// Returns a [WalrusBlobMetadata] with all fields needed for on-chain
   /// registration.
   WalrusBlobMetadata computeMetadata(int nShards, Uint8List data) {
+    _checkDimensions(nShards, data.length);
     final dataPtr = calloc<Uint8>(data.isEmpty ? 1 : data.length);
     final outBlobId = calloc<Uint8>(32);
     final outRootHash = calloc<Uint8>(32);
@@ -394,6 +410,7 @@ class WalrusFfiBindings {
 
   /// Get encoding parameters for a given shard count and blob size.
   WalrusEncodingParams encodingParams(int nShards, int blobLen) {
+    _checkDimensions(nShards, blobLen);
     final outP = calloc<Uint32>(1);
     final outS = calloc<Uint32>(1);
     final outSS = calloc<Uint32>(1);
@@ -447,6 +464,10 @@ class WalrusFfiBindings {
     final totalPriBytes = nShards * priSliverSize;
     final totalSecBytes = nShards * secSliverSize;
 
+    // BCS V1: at most two tagged 32-byte hashes per shard, plus the
+    // version, encoding type, length and vector prefix. The Rust side
+    // checks capacity before writing; it never emits placeholder hashes.
+    final metadataCapacity = nShards * 66 + 32;
     // Allocate input + output buffers.
     final dataPtr = calloc<Uint8>(data.isEmpty ? 1 : data.length);
     final outPriSlivers = calloc<Uint8>(totalPriBytes == 0 ? 1 : totalPriBytes);
@@ -455,6 +476,8 @@ class WalrusFfiBindings {
     final outRootHash = calloc<Uint8>(32);
     final outUnencodedLength = calloc<Uint64>(1);
     final outEncodingType = calloc<Uint8>(1);
+    final outMetadata = calloc<Uint8>(metadataCapacity);
+    final outMetadataLength = calloc<IntPtr>(1);
 
     try {
       if (data.isNotEmpty) {
@@ -471,12 +494,21 @@ class WalrusFfiBindings {
         outRootHash,
         outUnencodedLength,
         outEncodingType,
+        outMetadata,
+        metadataCapacity,
+        outMetadataLength,
       );
 
       if (ret != 0) {
-        throw WalrusFfiException('walrus_encode_blob failed with code $ret');
+        throw WalrusFfiException('walrus_encode_blob_v2 failed with code $ret');
       }
 
+      final metadataLength = outMetadataLength.value;
+      if (metadataLength <= 0 || metadataLength > metadataCapacity) {
+        throw WalrusFfiException(
+          'Native encoder returned an invalid metadata length',
+        );
+      }
       // Extract primary slivers.
       final primarySlivers = <Uint8List>[];
       for (var i = 0; i < nShards; i++) {
@@ -510,6 +542,9 @@ class WalrusFfiBindings {
           unencodedLength: outUnencodedLength.value,
           encodingType: outEncodingType.value,
         ),
+        metadataBytes: Uint8List.fromList(
+          outMetadata.asTypedList(metadataLength),
+        ),
         primarySlivers: primarySlivers,
         secondarySlivers: secondarySlivers,
         symbolSize: params.symbolSize,
@@ -522,6 +557,8 @@ class WalrusFfiBindings {
       calloc.free(outRootHash);
       calloc.free(outUnencodedLength);
       calloc.free(outEncodingType);
+      calloc.free(outMetadata);
+      calloc.free(outMetadataLength);
     }
   }
 
@@ -543,6 +580,7 @@ class WalrusFfiBindings {
     required int blobSize,
     required List<({int index, Uint8List data})> slivers,
   }) {
+    _checkDimensions(nShards, blobSize);
     if (slivers.isEmpty) {
       throw WalrusFfiException('decodeBlob: no slivers provided');
     }
@@ -631,6 +669,7 @@ class WalrusBlobMetadata {
 class WalrusFfiEncodedBlob {
   WalrusFfiEncodedBlob({
     required this.metadata,
+    required this.metadataBytes,
     required this.primarySlivers,
     required this.secondarySlivers,
     required this.symbolSize,
@@ -638,6 +677,9 @@ class WalrusFfiEncodedBlob {
 
   /// Blob metadata (blob ID, root hash, etc.).
   final WalrusBlobMetadata metadata;
+
+  /// Canonical BCS BlobMetadata, including every primary/secondary hash.
+  final Uint8List metadataBytes;
 
   /// Primary slivers, one per shard (indexed 0..nShards-1).
   final List<Uint8List> primarySlivers;

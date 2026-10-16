@@ -45,15 +45,21 @@ case "$PROFILE" in
     ;;
 esac
 
-# Detect the library file.
-if [[ -f "$LIB_DIR/libwalrus_ffi.dylib" ]]; then
-  LIB_FILE="$LIB_DIR/libwalrus_ffi.dylib"
-elif [[ -f "$LIB_DIR/libwalrus_ffi.so" ]]; then
-  LIB_FILE="$LIB_DIR/libwalrus_ffi.so"
-elif [[ -f "$LIB_DIR/walrus_ffi.dll" ]]; then
-  LIB_FILE="$LIB_DIR/walrus_ffi.dll"
-else
-  echo "Error: Could not find compiled library in $LIB_DIR" >&2
+# Select the current host's artifact. A shared/cached target directory may also
+# contain libraries from another platform; their presence is not build success.
+HOST_OS="$(uname -s)"
+case "$HOST_OS" in
+  Darwin) LIB_NAME="libwalrus_ffi.dylib" ;;
+  Linux) LIB_NAME="libwalrus_ffi.so" ;;
+  MINGW*|MSYS*|CYGWIN*) LIB_NAME="walrus_ffi.dll" ;;
+  *)
+    echo "Error: Unsupported build host '$HOST_OS'." >&2
+    exit 1
+    ;;
+esac
+LIB_FILE="$LIB_DIR/$LIB_NAME"
+if [[ ! -f "$LIB_FILE" ]]; then
+  echo "Error: Could not find $HOST_OS library at $LIB_FILE" >&2
   exit 1
 fi
 
@@ -61,7 +67,7 @@ LIB_SIZE=$(du -h "$LIB_FILE" | cut -f1)
 echo "==> Built successfully: $LIB_FILE ($LIB_SIZE)"
 echo ""
 echo "To use in Dart tests:"
-echo "  cd Dartus && dart test"
+echo "  cd \"$SCRIPT_DIR/..\" && flutter test --no-pub"
 echo ""
 echo "To set a custom library path:"
 echo "  export WALRUS_FFI_LIB=$CRATE_DIR/$LIB_FILE"

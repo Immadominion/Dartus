@@ -1,6 +1,6 @@
 # `flutter test` discovers only test/ and is deterministic/offline.
 # Opt-in live checks are kept in live_test/ and require explicit configuration.
-# Browser runtime: flutter test --platform chrome test/browser/http_browser_test.dart
+# Browser runtime: flutter test --platform chrome test/browser/ test/cache_regression_test.dart
 
 tags:
   unit:

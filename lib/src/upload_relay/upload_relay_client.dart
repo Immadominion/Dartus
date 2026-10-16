@@ -16,6 +16,7 @@ import 'package:http/http.dart' as http;
 import '../errors/walrus_errors.dart';
 import '../models/protocol_types.dart';
 import '../network/request_executor.dart';
+import '../utils/upload_policy.dart';
 
 /// Client for interacting with a Walrus Upload Relay.
 ///
@@ -132,6 +133,7 @@ class UploadRelayClient {
     bool requiresTip = false,
     String? encodingType,
   }) async {
+    requireDeletableUpload(deletable);
     final uri = Uri.parse('$host/v1/blob-upload-relay').replace(
       queryParameters: {
         'blob_id': blobId,

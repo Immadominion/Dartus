@@ -5,8 +5,8 @@
 /// HTTP (publisher/aggregator), relay (upload relay + wallet signing),
 /// and direct (client-side encoding + storage node interaction).
 ///
-/// Works with pure Dart projects and Flutter apps on mobile,
-/// desktop, and (HTTP mode) web platforms.
+/// Supports Flutter apps on mobile, desktop and web. HTTP bytes and
+/// wallet-paid relay writes work on web; direct/FFI APIs require native.
 ///
 /// ## Quick Start — HTTP Mode
 ///

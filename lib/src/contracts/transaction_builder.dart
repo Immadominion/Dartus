@@ -17,6 +17,7 @@ import '../constants/walrus_constants.dart';
 import '../models/protocol_types.dart';
 import '../utils/blob_id_utils.dart';
 import '../utils/encoding_utils.dart' show kEncodingTypeRS2, signersToBitmap;
+import '../utils/upload_policy.dart';
 
 /// Builds Walrus-specific Sui transactions.
 ///
@@ -94,6 +95,7 @@ class WalrusTransactionBuilder {
     required int encodedSize,
     Transaction? transaction,
   }) {
+    requireDeletableUpload(options.deletable);
     final tx = transaction ?? Transaction();
 
     // Resolve the WAL coin input.
@@ -180,6 +182,7 @@ class WalrusTransactionBuilder {
     required BigInt storageCost,
     required BigInt writeCost,
   }) {
+    requireDeletableUpload(deletable);
     final storagePayment = tx.coin(walType, storageCost, useGasCoin: false);
     final storage = tx.moveCall(
       '$walrusPackageId::system::reserve_space',
@@ -224,39 +227,21 @@ class WalrusTransactionBuilder {
   // Register Blob (legacy, for testing without WAL)
   // -------------------------------------------------------------------------
 
-  /// Build a transaction that registers a blob using gas coin as payment.
+  /// Retained only to explain migration from the invalid legacy builder.
   ///
-  /// **Warning**: This uses `tx.gas` as write payment, which only works
-  /// when the system accepts SUI for payment (not standard Walrus behavior).
-  /// For production use, call [registerBlobWithWal] instead.
-  ///
-  /// Kept for backward compatibility and local testing.
-  @Deprecated('Use registerBlobWithWal() for production WAL payment')
+  /// Walrus requires a Storage object and WAL payment. The old placeholder
+  /// implementation supplied the system object and SUI gas instead, so it
+  /// could never register a blob on the public networks. Use
+  /// [registerBlobWithWal] or [addRegisterBlob] for a valid transaction.
+  @Deprecated('Use registerBlobWithWal() or addRegisterBlob()')
   Transaction registerBlobTransaction(
     RegisterBlobOptions options, {
     Transaction? transaction,
   }) {
-    final tx = transaction ?? Transaction();
-
-    final registration = tx.moveCall(
-      '$walrusPackageId::system::register_blob',
-      arguments: [
-        tx.object(packageConfig.systemObjectId), // self
-        tx.object(packageConfig.systemObjectId), // storage (placeholder)
-        tx.pure.u256(blobIdToInt(options.blobId)), // blobId
-        tx.pure.u256(_rootHashToBigInt(options.rootHash)), // rootHash
-        tx.pure.u64(BigInt.from(options.size)), // size
-        tx.pure.u8(1), // encodingType
-        tx.pure.boolean(options.deletable), // deletable
-        tx.gas, // writePayment (simplified — not valid for Walrus)
-      ],
+    throw UnsupportedError(
+      'The legacy registration builder does not provide WAL payment. '
+      'Use registerBlobWithWal() or addRegisterBlob()',
     );
-
-    if (options.owner != null) {
-      tx.transferObjects([registration], tx.pure.address(options.owner!));
-    }
-
-    return tx;
   }
 
   // -------------------------------------------------------------------------
@@ -325,6 +310,7 @@ class WalrusTransactionBuilder {
     CertifyBlobOptions options, {
     Transaction? transaction,
   }) {
+    requireDeletableUpload(options.deletable);
     final tx = transaction ?? Transaction();
     final cert = options.certificate;
 

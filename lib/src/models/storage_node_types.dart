@@ -91,7 +91,7 @@ class StorageNodeInfo {
   /// Shard indices assigned to this node.
   final List<int> shardIndices;
 
-  /// BLS12-381 G1 public key (48 bytes compressed).
+  /// BLS12-381 G1 public key (96 bytes uncompressed on chain, or 48 compressed).
   ///
   /// Used for verifying storage confirmation signatures during
   /// certificate building. Populated from the on-chain staking
@@ -430,16 +430,21 @@ class CommitteeInfo {
   /// Map from shard index to the node responsible for it.
   final Map<int, StorageNodeInfo> nodeByShardIndex;
 
+  /// Members in on-chain order, preserving certificate bitmap indices.
+  final List<StorageNodeInfo>? members;
+
   const CommitteeInfo({
     required this.numShards,
     required this.epoch,
     required this.nodeByShardIndex,
+    this.members,
   });
 
   /// Returns the list of unique storage nodes in this committee.
   ///
   /// Derived from [nodeByShardIndex] by deduplicating on [StorageNodeInfo.nodeId].
   List<StorageNodeInfo> get nodes {
+    if (members != null) return List.unmodifiable(members!);
     final seen = <String>{};
     final result = <StorageNodeInfo>[];
     for (final node in nodeByShardIndex.values) {

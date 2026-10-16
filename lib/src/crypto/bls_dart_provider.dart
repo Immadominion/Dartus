@@ -27,13 +27,13 @@ import 'bls_provider.dart';
 /// Usage:
 /// ```dart
 /// import 'package:bls_dart/bls_dart.dart';
-/// import 'package:dartus/dartus.dart';
+/// import 'package:dartus/direct.dart';
 ///
 /// void main() async {
 ///   await RustLib.init();
 ///
 ///   final client = WalrusDirectClient(
-///     network: WalrusNetwork.testnet(),
+///     network: WalrusNetwork.testnet,
 ///     blsProvider: BlsDartProvider(),
 ///   );
 /// }

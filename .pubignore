@@ -38,3 +38,8 @@ Thumbs.db
 
 # pubspec overrides (local dev only)
 pubspec_overrides.yaml
+
+# Local contributor handoff material (not SDK documentation)
+docs/contributor-start.md
+docs/review-messages.md
+docs/verified-fixes.md

@@ -64,7 +64,7 @@ class WalrusBlobEncoder extends BlobEncoder {
         'Native FFI library (libwalrus_ffi) is required for encoding/decoding '
         'but could not be loaded. Call WalrusFfiBindings.configure() with the '
         'path to the library before creating encoder instances. '
-        'Original error: $e',
+        'Rebuild native/walrus_ffi with native/build.sh for this SDK version. Original error: $e',
       );
     }
   }
@@ -156,58 +156,15 @@ class WalrusBlobEncoder extends BlobEncoder {
       );
     }
 
-    // BCS-encode metadata using the canonical hashes from FFI.
-    // For now, we generate minimal metadata bytes. The full BCS metadata
-    // with per-pair hashes would require the FFI to export individual pair
-    // hashes, which is not yet exposed. For relay mode this is not needed;
-    // for direct mode the storage nodes verify slivers individually.
-    final metadataBytes = _bcsEncodeMetadataFromFFI(
-      encodingType: result.metadata.encodingType,
-      unencodedLength: data.length,
-      numShards: numShards,
-    );
-
     return EncodedBlob(
       blobId: blobId,
       blobIdBytes: blobIdBytes,
-      metadataBytes: metadataBytes,
+      metadataBytes: result.metadataBytes,
       rootHash: rootHash,
       unencodedLength: data.length,
       primarySlivers: primarySlivers,
       secondarySlivers: secondarySlivers,
     );
-  }
-
-  /// Minimal BCS metadata encoding for FFI path.
-  ///
-  /// The full per-pair hash metadata is not needed for the upload relay
-  /// (only blobId/rootHash matter). For direct mode, storage nodes verify
-  /// individual slivers via their own Merkle proofs.
-  Uint8List _bcsEncodeMetadataFromFFI({
-    required int encodingType,
-    required int unencodedLength,
-    required int numShards,
-  }) {
-    final builder = BytesBuilder(copy: false);
-
-    // BlobMetadata outer enum: V1 variant index = 0
-    builder.addByte(0);
-
-    // BlobMetadataV1.encoding_type: EncodingType BCS enum variant
-    builder.addByte(encodingType);
-
-    // BlobMetadataV1.unencoded_length: u64 LE
-    _writeU64(builder, unencodedLength);
-
-    // hashes: empty vector placeholder (relay doesn't need pair hashes)
-    _writeUleb128(builder, numShards);
-    // Each pair needs two MerkleNode::Empty entries as placeholder
-    for (var i = 0; i < numShards; i++) {
-      builder.addByte(0); // MerkleNode::Empty (primary)
-      builder.addByte(0); // MerkleNode::Empty (secondary)
-    }
-
-    return builder.toBytes();
   }
 
   // -------------------------------------------------------------------------
@@ -275,14 +232,6 @@ class WalrusBlobEncoder extends BlobEncoder {
   static void _writeU16(BytesBuilder builder, int value) {
     builder.addByte(value & 0xFF);
     builder.addByte((value >> 8) & 0xFF);
-  }
-
-  static void _writeU64(BytesBuilder builder, int value) {
-    var v = value;
-    for (var i = 0; i < 8; i++) {
-      builder.addByte(v & 0xFF);
-      v >>= 8;
-    }
   }
 
   static void _writeUleb128(BytesBuilder builder, int value) {

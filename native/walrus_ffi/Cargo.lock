@@ -1664,6 +1664,7 @@ dependencies = [
 name = "walrus_ffi"
 version = "0.2.0"
 dependencies = [
+ "bcs",
  "walrus-core",
 ]
 

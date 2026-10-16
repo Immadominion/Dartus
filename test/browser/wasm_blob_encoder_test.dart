@@ -45,6 +45,19 @@ void main() {
     expect(a.nonce, isNot(b.nonce));
   });
 
+  test(
+    'wallet flow immutable bytes work with the worker and WebCrypto',
+    () async {
+      final vector = blobMetadataVectors.last;
+      final data = vector.data().asUnmodifiableView();
+      final metadata = await encoder.computeMetadata(data, blobMetadataShards);
+      expect(metadata.blobId, vector.blobId);
+      expect(hex(metadata.rootHash), vector.rootHashHex);
+      expect(metadata.blobDigest, sha256.convert(data).bytes);
+      expect(metadata.unencodedLength, data.length);
+    },
+  );
+
   test('the default encoder on the web is WasmBlobEncoder', () {
     expect(createDefaultBlobEncoder(), isA<WasmBlobEncoder>());
   });

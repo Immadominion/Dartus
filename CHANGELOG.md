@@ -5,9 +5,9 @@ All notable changes to Dartus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] — unreleased
 
-Planned as 0.4.0: storage paid for by the person's own wallet, on Flutter
+Local release candidate: storage paid for by the person's own wallet, on Flutter
 web and natively.
 
 ### Added
@@ -15,8 +15,8 @@ web and natively.
 - `WalrusWriter`: register, upload through the upload relay, and certify a
   blob with the signer paying WAL, gas and the relay tip. Two wallet
   approvals per write; the Blob object goes to the signer or a `recipient`.
-  `WalrusWriteFlow.run` continues after a declined approval or a failed
-  upload without registering or paying twice. `estimate` prices a write;
+  `WalrusWriteFlow.run` resumes recorded steps in a retained flow.
+  `estimate` prices a write;
   `InsufficientWalBalanceError` is raised before the wallet is asked.
 - `WalrusWriter.writeFiles`: several files as one quilt (two approvals and
   one storage fee per batch), with a quilt patch ID per file.
@@ -41,8 +41,16 @@ web and natively.
 ### Changed (breaking)
 
 - Requires `sui` ^0.5.1 (gRPC-web and GraphQL clients; pointycastle 4).
-  Sui's public JSON-RPC is shut down; `WalrusDirectClient` still uses it
-  and does not work against public full nodes until it moves to gRPC.
+  Default `WalrusDirectClient` chain operations now use gRPC.
+- All upload entry points reject `deletable: false` before submission.
+- Native users must rebuild `libwalrus_ffi`: encoding now requires
+  `walrus_encode_blob_v2` for complete canonical metadata.
+- The deprecated transaction builder `registerBlobTransaction` now throws
+  instead of constructing an invalid placeholder transaction. Use
+  `registerBlobWithWal` or `addRegisterBlob`.
+- Wallet timeouts and lost responses block retry until the original outcome
+  is resolved. A custom signer must identify definite declines with
+  `WalrusTransactionNotCommitted` or `isDefinitelyNotCommitted`.
 - `TipStrategy.calculateTip` and `UploadRelayTipConfig.calculateTip` take the
   **encoded** size; `sendUploadRelayTip` takes `encodedSize`. A tip above
   `max` now throws instead of being capped.
@@ -51,6 +59,22 @@ web and natively.
 
 ### Fixed
 
+- Native encoding returns the actual per-pair Merkle hashes from walrus-core;
+  a byte-for-byte WASM reference fixture replaces placeholder metadata.
+- Direct uploads use one authenticated confirmation per committee node,
+  validate shard-weight quorum, the exact signed message and aggregate signature,
+  and require BLS
+  before payment. Native wallet flows verify registration and certification
+  on chain. Default storage-node transport no longer bypasses TLS checks.
+- Wallet flows reject concurrent submissions, retain paid metadata on retry,
+  validate receipt ownership/content/storage period, and distinguish unknown
+  submission outcomes from definite rejection. Optional `maxRelayTip` caps
+  the tip at estimate and registration time.
+- Streaming replacement preserves checked permission bits and symlink targets
+  while staging changes before rename. Cleanup errors cannot mask the result.
+  No age-based deletion of unknown staging directories is performed.
+- Native build output is untracked and the build script selects only the
+  current host's library artifact.
 - Linear relay tips were computed from the unencoded size, underpaying the
   mainnet relay, which then refused uploads after WAL had been spent.
 - `UploadRelayClient` used `dart:io` and could not run on Flutter web; it now
@@ -74,7 +98,7 @@ web and natively.
   duplicate coin IDs, and reject missing or repeated continuation cursors.
 - README examples now use the current imports and named arguments. Security
   documentation distinguishes source checks from audits and records current
-  direct-mode transport and upload-policy limitations.
+  current transport, upload-policy and live-verification limits.
 
 ### Changed
 

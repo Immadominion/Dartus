@@ -2,7 +2,7 @@ name: dartus
 description: >-
   Dart and Flutter SDK for Walrus blob storage, with publisher uploads,
   aggregator reads, wallet transaction builders, quilts, and native encoding.
-version: 0.3.0
+version: 0.4.0
 repository: https://github.com/Immadominion/Dartus
 homepage: https://github.com/Immadominion/Dartus
 issue_tracker: https://github.com/Immadominion/Dartus/issues

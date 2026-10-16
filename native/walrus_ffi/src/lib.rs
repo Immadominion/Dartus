@@ -165,6 +165,80 @@ pub unsafe extern "C" fn walrus_encode_blob(
     out_unencoded_length: *mut u64, // 8 bytes
     out_encoding_type: *mut u8,   // 1 byte
 ) -> i32 {
+    encode_blob(
+        n_shards,
+        data_ptr,
+        data_len,
+        out_primary_slivers,
+        out_secondary_slivers,
+        out_blob_id,
+        out_root_hash,
+        out_unencoded_length,
+        out_encoding_type,
+        std::ptr::null_mut(),
+        0,
+        std::ptr::null_mut(),
+    )
+}
+
+/// Encode slivers and export the canonical BCS BlobMetadata from the same run.
+///
+/// Returns -4 when the metadata buffer is too small (required length is set),
+/// -5 on serialization failure; otherwise uses the legacy encoder status codes.
+///
+/// # Safety
+/// All legacy output buffers must have the sizes given by walrus_encoding_params.
+/// out_metadata must hold metadata_capacity bytes, and out_metadata_len must be
+/// non-null and writable. No Rust allocations cross this ABI boundary.
+#[no_mangle]
+pub unsafe extern "C" fn walrus_encode_blob_v2(
+    n_shards: u16,
+    data_ptr: *const u8,
+    data_len: usize,
+    out_primary_slivers: *mut u8,
+    out_secondary_slivers: *mut u8,
+    out_blob_id: *mut u8,
+    out_root_hash: *mut u8,
+    out_unencoded_length: *mut u64,
+    out_encoding_type: *mut u8,
+    out_metadata: *mut u8,
+    metadata_capacity: usize,
+    out_metadata_len: *mut usize,
+) -> i32 {
+    if out_metadata.is_null() || out_metadata_len.is_null() {
+        return -1;
+    }
+    *out_metadata_len = 0;
+    encode_blob(
+        n_shards,
+        data_ptr,
+        data_len,
+        out_primary_slivers,
+        out_secondary_slivers,
+        out_blob_id,
+        out_root_hash,
+        out_unencoded_length,
+        out_encoding_type,
+        out_metadata,
+        metadata_capacity,
+        out_metadata_len,
+    )
+}
+
+unsafe fn encode_blob(
+    n_shards: u16,
+    data_ptr: *const u8,
+    data_len: usize,
+    out_primary_slivers: *mut u8, // n_shards × primary_sliver_size bytes
+    out_secondary_slivers: *mut u8, // n_shards × secondary_sliver_size bytes
+    out_blob_id: *mut u8,         // 32 bytes
+    out_root_hash: *mut u8,       // 32 bytes
+    out_unencoded_length: *mut u64, // 8 bytes
+    out_encoding_type: *mut u8,   // 1 byte
+    out_metadata: *mut u8,
+    metadata_capacity: usize,
+    out_metadata_len: *mut usize,
+) -> i32 {
     if n_shards == 0
         || out_primary_slivers.is_null()
         || out_secondary_slivers.is_null()
@@ -191,6 +265,17 @@ pub unsafe extern "C" fn walrus_encode_blob(
 
     match result {
         Ok(Ok((sliver_pairs, verified_metadata))) => {
+            if !out_metadata_len.is_null() {
+                let bytes = match bcs::to_bytes(verified_metadata.metadata()) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return -5,
+                };
+                *out_metadata_len = bytes.len();
+                if bytes.len() > metadata_capacity {
+                    return -4;
+                }
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_metadata, bytes.len());
+            }
             // Write primary slivers contiguously.
             // Each sliver_pair.primary.symbols.data() gives the raw sliver bytes.
             if !sliver_pairs.is_empty() {
@@ -675,5 +760,39 @@ mod tests {
             &data[..],
             "decoded data should match original"
         );
+    }
+    #[test]
+    fn metadata_buffer_too_small_does_not_write_output() {
+        let input = [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let mut primary = [0x55u8; 24];
+        let mut secondary = [0x55u8; 16];
+        let mut blob_id = [0x55u8; 32];
+        let mut root = [0x55u8; 32];
+        let mut length = 0;
+        let mut encoding = 0;
+        let mut metadata = [0x55u8; 1];
+        let mut metadata_len = 0;
+        let status = unsafe {
+            walrus_encode_blob_v2(
+                4,
+                input.as_ptr(),
+                input.len(),
+                primary.as_mut_ptr(),
+                secondary.as_mut_ptr(),
+                blob_id.as_mut_ptr(),
+                root.as_mut_ptr(),
+                &mut length,
+                &mut encoding,
+                metadata.as_mut_ptr(),
+                metadata.len(),
+                &mut metadata_len,
+            )
+        };
+        assert_eq!(status, -4);
+        assert_eq!(metadata_len, 275);
+        assert_eq!(metadata, [0x55]);
+        assert!(primary.iter().all(|b| *b == 0x55));
+        assert!(secondary.iter().all(|b| *b == 0x55));
+        assert!(blob_id.iter().all(|b| *b == 0x55));
     }
 }

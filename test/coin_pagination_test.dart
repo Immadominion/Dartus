@@ -10,6 +10,7 @@ import 'package:dartus/src/encoding/blob_encoder.dart';
 import 'package:dartus/src/errors/walrus_errors.dart';
 import 'package:dartus/src/files/file.dart';
 import 'package:dartus/src/models/protocol_types.dart';
+import 'package:dartus/src/upload_relay/upload_relay_client.dart';
 import 'package:sui/sui.dart';
 import 'package:test/test.dart';
 
@@ -23,8 +24,34 @@ class _PagedSuiClient extends SuiClient {
   final Map<String?, PaginatedCoins> pages;
   final List<String?> cursors = [];
   Transaction? submittedTransaction;
+  int systemReads = 0;
 
   _PagedSuiClient(this.pages) : super('http://127.0.0.1:1');
+
+  @override
+  Future<SuiObjectResponse> getObject(
+    String objectId, {
+    SuiObjectDataOptions? options,
+  }) async {
+    expect(objectId, WalrusNetwork.testnet.packageConfig.systemObjectId);
+    systemReads++;
+    // Registration resolves the network's Blob type before constructing a
+    // payment. Keep that real lookup path while returning a local fixture.
+    return SuiObjectResponse.fromJson({
+      'data': {
+        'objectId': objectId,
+        'version': '1',
+        'digest': 'system-fixture',
+        'type': '0x123::system::System',
+        'content': {
+          'dataType': 'moveObject',
+          'type': '0x123::system::System',
+          'hasPublicTransfer': false,
+          'fields': {'version': '1', 'package_id': '0x123'},
+        },
+      },
+    });
+  }
 
   @override
   Future<PaginatedCoins> getCoins(
@@ -54,7 +81,27 @@ class _PagedSuiClient extends SuiClient {
   }) async {
     // Deliberately neither build nor sign nor submit: inspect the commands only.
     submittedTransaction = transaction;
-    return SuiTransactionBlockResponse.fromJson({'digest': 'mock-digest'});
+    return SuiTransactionBlockResponse.fromJson({
+      'digest': 'mock-digest',
+      'effects': {
+        'status': {'status': 'success'},
+        'transactionDigest': 'mock-digest',
+        'gasUsed': {
+          'computationCost': '0',
+          'storageCost': '0',
+          'storageRebate': '0',
+          'nonRefundableStorageFee': '0',
+        },
+        'gasObject': {
+          'owner': {'AddressOwner': _owner},
+          'reference': {
+            'objectId': '0x10',
+            'version': '1',
+            'digest': 'gas-fixture',
+          },
+        },
+      },
+    });
   }
 }
 
@@ -71,6 +118,15 @@ class _UnusedSigner implements SuiAccount {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw StateError('This test must not sign');
+}
+
+// These registration-only tests use the relay path: metadata is sufficient
+// there, whereas direct mode correctly requires fully encoded slivers.
+// Accessing the relay fails, so no upload or other network operation is hidden.
+class _UnusedRelay implements UploadRelayClient {
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('This test must not contact an upload relay');
 }
 
 BlobMetadata _metadata(int length) => BlobMetadata(
@@ -156,6 +212,7 @@ void main() {
       final flow = WriteBlobFlow(
         blob: Uint8List.fromList([1, 2, 3]),
         txBuilder: _builder(),
+        relayClient: _UnusedRelay(),
         precomputedMetadata: _metadata(3),
         suiClient: sui,
       );
@@ -172,6 +229,7 @@ void main() {
         ),
       );
       expect(sui.cursors, [null, 'second']);
+      expect(sui.systemReads, 1);
       expect(_objectInputs(tx), contains(normalizeSuiAddress('0x2')));
       expect(_objectInputs(tx), isNot(contains(normalizeSuiAddress('0x1'))));
       expect(sui.submittedTransaction, isNull);
@@ -187,6 +245,7 @@ void main() {
           ),
         ],
         txBuilder: _builder(),
+        relayClient: _UnusedRelay(),
         encoder: _FixtureEncoder(),
         suiClient: sui,
       );
@@ -203,6 +262,7 @@ void main() {
         ),
       );
       expect(sui.cursors, [null, 'second']);
+      expect(sui.systemReads, 1);
       expect(_objectInputs(tx), contains(normalizeSuiAddress('0x2')));
       expect(_objectInputs(tx), isNot(contains(normalizeSuiAddress('0x1'))));
       expect(sui.submittedTransaction, isNull);

@@ -11,12 +11,14 @@ import 'package:meta/meta.dart';
 import 'package:sui/builder/coin_with_balance.dart';
 import 'package:sui/grpc/proto/sui/rpc/v2/effects.pb.dart' as pb;
 import 'package:sui/grpc/proto/sui/rpc/v2/object.pb.dart' as pb;
+import 'package:sui/grpc/proto/sui/rpc/v2/owner.pb.dart' as pb;
 import 'package:sui/sui.dart';
 
 import '../constants/walrus_constants.dart';
 import '../errors/walrus_errors.dart';
 import '../utils/blob_id_utils.dart';
 import '../utils/encoding_utils.dart';
+import 'transaction_signer.dart';
 
 /// A snapshot of the Walrus system object and its current inner state.
 @immutable
@@ -257,6 +259,10 @@ class WalrusChainReader {
       objectId,
       readMask: const ['object_id', 'object_type', 'owner', 'json'],
     );
+    if (!object.hasObjectId() ||
+        normalizeSuiAddress(object.objectId) != normalizeSuiAddress(objectId)) {
+      throw WalrusClientError('Blob lookup returned a different object ID');
+    }
     if (object.objectType != snapshot.blobType) {
       throw WalrusClientError(
         'Object $objectId is a ${object.objectType}, not a Walrus blob',
@@ -276,7 +282,9 @@ class WalrusChainReader {
       startEpoch: _int(storage['start_epoch'], 'start_epoch'),
       endEpoch: _int(storage['end_epoch'], 'end_epoch'),
       deletable: json['deletable'] == true,
-      owner: owner.isEmpty ? null : owner,
+      owner: object.owner.kind == pb.Owner_OwnerKind.ADDRESS && owner.isNotEmpty
+          ? owner
+          : null,
     );
   }
 
@@ -314,10 +322,20 @@ class WalrusChainReader {
       timeout: timeout,
       readMask: const ['digest', 'effects'],
     );
+    // Absent protobuf fields have default values, including success=false.
+    // Keep the digest and retry the lookup unless failure is explicit.
+    if (!transaction.hasEffects() ||
+        !transaction.effects.hasStatus() ||
+        !transaction.effects.status.hasSuccess()) {
+      throw WalrusClientError(
+        'Transaction $digest has no confirmed execution status yet',
+      );
+    }
     final effects = transaction.effects;
     if (!effects.status.success) {
       final reason = effects.status.error.description;
-      throw WalrusClientError(
+      throw WalrusTransactionExecutionFailed(
+        digest,
         'Transaction $digest failed${reason.isEmpty ? '' : ': $reason'}',
       );
     }

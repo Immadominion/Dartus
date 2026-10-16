@@ -112,14 +112,14 @@ class CommitteeResolver {
 
     // Build shard → node mapping.
     final byShardIndex = <int, StorageNodeInfo>{};
+    final members = <StorageNodeInfo>[];
 
     for (var i = 0; i < nodeIds.length; i++) {
       final nodeId = nodeIds[i];
       final pool = pools[nodeId];
 
       if (pool == null) {
-        // Skip nodes whose pools couldn't be fetched.
-        continue;
+        throw StateError('Cannot resolve committee member $nodeId');
       }
 
       final shardIndices = committeeMembers[nodeId] ?? [];
@@ -131,7 +131,13 @@ class CommitteeResolver {
         publicKey: pool.publicKey,
       );
 
+      members.add(node);
       for (final shardIndex in shardIndices) {
+        if (shardIndex < 0 ||
+            shardIndex >= nShards ||
+            byShardIndex.containsKey(shardIndex)) {
+          throw StateError('Invalid or duplicate committee shard $shardIndex');
+        }
         byShardIndex[shardIndex] = node;
       }
     }
@@ -140,6 +146,7 @@ class CommitteeResolver {
       numShards: nShards,
       epoch: epoch,
       nodeByShardIndex: byShardIndex,
+      members: List.unmodifiable(members),
     );
   }
 
@@ -169,12 +176,14 @@ class CommitteeResolver {
         final resp = responses[j];
 
         if (resp.error != null || resp.data?.content == null) {
-          continue;
+          throw StateError('Cannot read committee staking pool $nodeId');
         }
 
         final pool = _parseStakingPool(resp.data!.content!);
         if (pool != null) {
           result[nodeId] = pool;
+        } else {
+          throw StateError('Malformed committee staking pool $nodeId');
         }
       }
     }

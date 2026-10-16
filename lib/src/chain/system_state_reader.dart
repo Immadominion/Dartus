@@ -65,6 +65,9 @@ class WalrusSystemState {
   /// Current Walrus epoch.
   final int epoch;
 
+  /// Number of BLS committee members (signer bitmap bits, not shard count).
+  final int committeeSize;
+
   /// Price per storage unit per epoch (in WAL).
   final BigInt storagePricePerUnitSize;
 
@@ -80,6 +83,7 @@ class WalrusSystemState {
   const WalrusSystemState({
     required this.nShards,
     required this.epoch,
+    this.committeeSize = 0,
     required this.storagePricePerUnitSize,
     required this.writePricePerUnitSize,
     required this.totalCapacitySize,
@@ -413,6 +417,7 @@ class SystemStateReader {
     _systemState = WalrusSystemState(
       nShards: _parseIntField(committeeFields ?? valueFields, 'n_shards'),
       epoch: _parseIntField(committeeFields ?? valueFields, 'epoch'),
+      committeeSize: (committeeFields?['members'] as List?)?.length ?? 0,
       storagePricePerUnitSize: _parseBigIntField(
         valueFields,
         'storage_price_per_unit_size',
@@ -687,23 +692,29 @@ class SystemStateReader {
         );
       }
 
-      // Variant field: `variant` key.
-      final variant = fields['variant'];
+      // gRPC Move JSON uses @variant and positional payload pos0.
+      final variant = fields['@variant'] ?? fields['variant'];
       if (variant is String) {
         if (variant.contains('EpochChangeSync')) {
           return EpochState(
             kind: EpochStateKind.epochChangeSync,
-            value: _tryParseInt(fields['value'] ?? fields['fields']),
+            value: _tryParseInt(
+              fields['pos0'] ?? fields['value'] ?? fields['fields'],
+            ),
           );
         } else if (variant.contains('EpochChangeDone')) {
           return EpochState(
             kind: EpochStateKind.epochChangeDone,
-            value: _tryParseInt(fields['value'] ?? fields['fields']),
+            value: _tryParseInt(
+              fields['pos0'] ?? fields['value'] ?? fields['fields'],
+            ),
           );
         } else if (variant.contains('NextParamsSelected')) {
           return EpochState(
             kind: EpochStateKind.nextParamsSelected,
-            value: _tryParseInt(fields['value'] ?? fields['fields']),
+            value: _tryParseInt(
+              fields['pos0'] ?? fields['value'] ?? fields['fields'],
+            ),
           );
         }
       }

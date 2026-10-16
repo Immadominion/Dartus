@@ -15,6 +15,7 @@ class _FixtureRpc extends JsonRpcClient {
 
   final calls = <String>[];
   String epochVariant = 'EpochChangeSync';
+  bool grpcEpochShape = false;
   Object? failure;
   bool missingState = false;
   bool malformedCommittee = false;
@@ -52,7 +53,9 @@ class _FixtureRpc extends JsonRpcClient {
               'epoch': '42',
               'committee': malformedCommittee ? 123 : _members('0xaaa', [0, 1]),
               'previous_committee': _members('0xbbb', [2, 3]),
-              'epoch_state': {epochVariant: '7'},
+              'epoch_state': grpcEpochShape
+                  ? {'@variant': epochVariant, 'pos0': '7'}
+                  : {epochVariant: '7'},
             },
           },
         });
@@ -141,6 +144,20 @@ void main() {
       });
       expect(await client.stakingState(), same(state));
       expect(rpc.calls, ['sui_getObject', 'suix_getDynamicFieldObject']);
+    });
+  }
+
+  for (final variant in {
+    'EpochChangeSync': EpochStateKind.epochChangeSync,
+    'EpochChangeDone': EpochStateKind.epochChangeDone,
+    'NextParamsSelected': EpochStateKind.nextParamsSelected,
+  }.entries) {
+    test('stakingState parses gRPC @variant/pos0 ${variant.key}', () async {
+      rpc.grpcEpochShape = true;
+      rpc.epochVariant = variant.key;
+      final state = await client.stakingState();
+      expect(state.epochState.kind, variant.value);
+      expect(state.epochState.value, 7);
     });
   }
 

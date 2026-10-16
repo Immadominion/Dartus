@@ -61,6 +61,8 @@ Future<WalrusWriteResult> storeWithRetry(
   for (var attempt = 1; ; attempt++) {
     try {
       return await flow.run(signer);
+    } on WalrusTransactionOutcomeUnknown {
+      rethrow; // Check wallet history; the original submission may still succeed.
     } on InsufficientWalBalanceError {
       rethrow; // Retrying will not help until the wallet holds more WAL.
     } on Object {

@@ -20,7 +20,9 @@ Dartus is a Dart/Flutter SDK for [Walrus](https://walrus.xyz) blob storage. It p
 
 The HTTP publisher operator pays on-chain storage costs and may require authentication or charge for its service. `WalrusWriter` and the direct and relay writes use the user's wallet for SUI gas and WAL storage costs. A relay accepts the raw blob, but registration still needs valid metadata; the built-in metadata encoder uses FFI too.
 
-The current direct paths (`WalrusDirectClient`) still use Sui JSON-RPC, which public full nodes no longer serve, and need work on certification and metadata; and the direct storage-node HTTP client accepts invalid TLS certificates. Treat the native examples below as API examples, not a claim of mainnet readiness. See [SECURITY.md](SECURITY.md).
+This checkout prepares 0.4.0. The native direct client now uses Sui gRPC, validates TLS certificates, and verifies storage confirmations with BLS. Its full live write path still needs acceptance testing; unit tests and read-only network checks do not establish mainnet readiness. See [SECURITY.md](SECURITY.md).
+
+All upload APIs require deletable blobs. Passing `deletable: false` fails before submission; existing non-deletable blobs remain readable.
 
 ## Installation
 
@@ -37,7 +39,7 @@ If your app imports Sui types directly, also declare `sui: ^0.5.1` under depende
 flutter pub get
 ```
 
-Version 0.3.0 is the [published release](https://pub.dev/packages/dartus). Local fixes in this checkout are not included in that hosted release until a new version is published. Use a local path dependency when testing these changes:
+The installation example above targets the previously published 0.3.0. The 0.4.0 changes in this checkout are not published yet. Use a local path dependency when testing these changes:
 
 ```yaml
 dependencies:
@@ -45,7 +47,7 @@ dependencies:
     path: ../Dartus
 ```
 
-The path must point from your app to this checkout. The byte-oriented HTTP API has a Chrome JavaScript runtime smoke test; this does not establish WebAssembly support or browser support for direct/FFI APIs.
+The path must point from your app to this checkout. Chrome tests cover the HTTP byte API, memory cache and the WASM encoder running in a worker. They use the JavaScript Flutter build; native direct/FFI APIs remain unavailable in browsers.
 
 ## HTTP quick start
 
@@ -80,7 +82,7 @@ The exact functions live in [tool/quickstart_http.dart](tool/quickstart_http.dar
 
 - `getBlob(blobId)` and `getBlobAsFile(...)` use the byte cache: files on native, memory in the browser. Cache capacity counts entries, not bytes.
 - `getBlobByObjectId(objectId)` downloads through `/v1/blobs/by-object-id/<objectId>`.
-- `getBlobAsFileStreaming(...)` always reads from the aggregator and bypasses cache reads and writes. It writes chunks to a temporary file with backpressure, replaces the destination only on success, and removes partial output on failure.
+- `getBlobAsFileStreaming(...)` reads from the aggregator without using the byte cache. It stages chunks with backpressure and replaces the destination only after success. Existing symlinks remain links and their targets are replaced; permission bits are checked and preserved. This copies the old file once and requires read access and temporary disk space. Ownership, ACLs and hard-link identity are not preserved. Cleanup is best effort; abandoned staging directories require manual cleanup. Prevent concurrent changes to destination paths.
 - `timeout` defaults to 30 seconds: one deadline for response headers, then an inactivity timeout between response-body events. A progressing transfer can take longer than 30 seconds overall. A stalled body raises `TimeoutException`; an HTTP error response raises `WalrusApiError` after its body is read. The headers deadline alone does not abort an underlying request.
 - `BlobCache.cleanup()` clears stored data and permits reuse. `dispose()` waits for pending cache work, removes temporary storage, and rejects later operations. Explicitly supplied cache directories are kept on disposal.
 
@@ -120,7 +122,8 @@ print('${result.blobId} is owned by ${result.blob.owner}');
 
 - **Wallets:** a wallet receives `tx.json`, the serialized form `@mysten/sui`'s dApp Kit hands to `sui:signAndExecuteTransaction`. WAL and the SUI tip are already resolved against the signer's coins and address balance, and the wallet adds gas. `sui_wallet_web` provides `signAndExecuteTransaction` for Flutter web. Scripts and tests can use `KeypairTransactionSigner`.
 - **Several files:** `writeFiles` stores a batch as one Walrus quilt: one blob, so two approvals and one storage fee for the whole batch. Every blob pays for at least about 64 MB of encoded storage, so this is far cheaper for small files. Each file gets a patch ID; read it with `WalrusClient.getQuiltPatch(patchId)`. The relay accepts one blob per paid transaction, so a quilt is the way to batch.
-- **Retrying:** keep the `WalrusWriteFlow` from `writeFlow(...)` (or `writeFilesFlow`). `run(signer)` continues after a declined approval or a failed upload without registering or paying twice. Too little WAL fails before the wallet is asked (`InsufficientWalBalanceError`).
+- **Retrying:** retain the `WalrusWriteFlow` from `writeFlow(...)` (or `writeFilesFlow`). `run(signer)` resumes a recorded registration after a failed upload. A definite wallet decline is retryable when the signer throws `WalrusTransactionNotCommitted` or its `isDefinitelyNotCommitted` callback identifies an explicit rejection. A timeout or lost response raises `WalrusTransactionOutcomeUnknown` and blocks resubmission. Check wallet history, then supply the original digest via `registered` / `certified`; call `confirmNotCommitted()` only when the original request cannot succeed. This state is in memory: a page reload loses it, so check prior transactions before starting a new flow. Too little WAL fails before approval.
+- **Relay budget:** set `WalrusWriter(maxRelayTip: BigInt.from(...))` in MIST to reject a relay tip above your limit before approval. Estimates are refreshed when building registration; gas and WAL are separate costs.
 - **On the web:** blob metadata comes from Mysten's `walrus-wasm`, running in a Web Worker so the page stays responsive. Flutter bundles the files from `assets/walrus_wasm/` (Apache-2.0; see its README). If your page sends a Content-Security-Policy, allow `worker-src blob:`, `script-src 'self' 'wasm-unsafe-eval'`, and `connect-src` for the Sui full node and the relay. Natively, metadata comes from `libwalrus_ffi` (see below).
 - **Chain reads:** these use Sui's gRPC-web API (`package:sui` 0.5), with CORS open for browsers. `WalrusChainReader` also exposes balances, Blob objects and system state.
 - **Mainnet:** `WalrusNetwork.mainnet`, with Mysten's mainnet relay (its tip is priced per encoded KiB).
@@ -142,7 +145,9 @@ Set a custom library path if it is not found automatically:
 export WALRUS_FFI_LIB=/absolute/path/to/libwalrus_ffi.dylib
 ```
 
-Use the appropriate `.so` or `.dll` library on other supported native targets. There is **no pure-Dart fallback**. `WalrusBlobEncoder.isNativeAvailable` checks availability; encoding/decoding throws `StateError` if the library cannot load. A custom `BlobEncoder` or precomputed metadata can serve certain relay paths, but does not make the native-only `direct.dart` entry point browser-compatible.
+**Rebuild the native library when upgrading to 0.4.0.** The new `walrus_encode_blob_v2` symbol returns full canonical metadata; old binaries cannot satisfy it. Use the appropriate `.so` or `.dll` library on other supported native targets. There is **no pure-Dart fallback**. `WalrusBlobEncoder.isNativeAvailable` checks availability; encoding/decoding throws `StateError` if the library cannot load. A custom `BlobEncoder` or precomputed metadata can serve certain relay paths, but does not make the native-only `direct.dart` entry point browser-compatible.
+
+Direct storage-node writes also require an initialized `BlsProvider`. If using `BlsDartProvider`, initialize `bls_dart`'s `RustLib` and its separate native library before constructing the client. A missing provider is rejected before registration; callers must initialize their chosen backend. Wallet/relay writes use the relay's certificate and do not require this local BLS provider.
 
 ## Native API examples
 
@@ -178,7 +183,7 @@ Call `client.close()` when finished with the native client. `fromNetwork` uses t
 
 ### Separate wallet signing from the write flow
 
-The flow runs in a native app. Supply an adapter that signs and executes a `Transaction` and returns the result map, including `digest` and `objectChanges` (or `effects` identifying the created blob). Merely building the certify transaction does not execute it.
+The flow runs in a native app. Supply an adapter that signs and executes a `Transaction` and returns the result map, including `digest` and typed `objectChanges`, or explicitly pass the registered `blobObjectId` in the upload options. Merely building the certify transaction does not execute it.
 
 ```dart
 Future<void> writeWithWallet(

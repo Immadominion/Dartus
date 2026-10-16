@@ -9,6 +9,7 @@ import '../cache/blob_cache.dart';
 import '../logging/walrus_logging.dart';
 import '../models/walrus_api_error.dart';
 import '../network/request_executor.dart';
+import '../utils/upload_policy.dart';
 
 // Re-export logging types so consumers importing walrus_client.dart
 // get WalrusLogLevel, WalrusLogger, etc. without a separate import.
@@ -154,7 +155,7 @@ class WalrusClient {
   ///
   /// Optional parameters:
   /// * [epochs]: Storage duration in epochs
-  /// * [deletable]: Whether the blob can be deleted later (defaults to `true`)
+  /// * [deletable]: Must be `true` or omitted; non-deletable uploads are rejected
   /// * [sendObjectTo]: SUI address to send the blob object
   /// * [jwtToken]: Per-call JWT override (overrides instance token)
   ///
@@ -176,6 +177,7 @@ class WalrusClient {
     String? sendObjectTo,
     String? jwtToken,
   }) async {
+    requireDeletableUpload(deletable);
     logInfo('Uploading ${data.lengthInBytes} bytes to Walrus');
     final uri = _publisherUri(
       'v1/blobs',
@@ -210,6 +212,7 @@ class WalrusClient {
     String? sendObjectTo,
     String? jwtToken,
   }) async {
+    requireDeletableUpload(deletable);
     if (!await file.exists()) {
       throw FileSystemException('File does not exist', file.path);
     }
@@ -235,6 +238,7 @@ class WalrusClient {
     String? sendObjectTo,
     String? jwtToken,
   }) async {
+    requireDeletableUpload(deletable);
     if (!await file.exists()) {
       throw FileSystemException('File does not exist', file.path);
     }
@@ -350,7 +354,13 @@ class WalrusClient {
   /// This method always reads from the aggregator and bypasses cache reads and
   /// writes to keep memory bounded. Use [getBlobAsFile] for cached downloads.
   /// The destination is replaced only after the complete download succeeds;
-  /// failed downloads discard the temporary file and preserve an existing file.
+  /// failed downloads preserve an existing file; temporary cleanup is best effort.
+  /// Existing symlinks must resolve to a regular file and are left intact.
+  /// Replacement copies the old file once to preserve permission bits, requiring
+  /// read access and temporary disk space. Unsupported permission preservation
+  /// fails before replacement. Ownership, ACLs, and hard-link identity are not
+  /// preserved. Same-filesystem replacement is atomic on POSIX; callers must
+  /// prevent concurrent modifications of destination paths.
   Future<void> getBlobAsFileStreaming({
     required String blobId,
     required File destination,
@@ -433,10 +443,8 @@ class WalrusClient {
     if (epochs != null) {
       params['epochs'] = epochs.toString();
     }
-    // Default to deletable=true for Walrus ecosystem compliance.
-    // Pass deletable: false explicitly to create permanent blobs.
-    final isDeletable = deletable ?? true;
-    params['deletable'] = isDeletable ? 'true' : 'false';
+    requireDeletableUpload(deletable);
+    params['deletable'] = 'true';
     if (sendObjectTo != null) {
       params['send_object_to'] = sendObjectTo;
     }
@@ -512,12 +520,49 @@ class WalrusClient {
     );
     try {
       await destination.parent.create(recursive: true);
-      stagingDirectory = await destination.parent.createTemp(
-        '.dartus-download-',
+      final destinationType = await FileSystemEntity.type(
+        destination.path,
+        followLinks: false,
       );
+      var target = destination;
+      int? originalMode;
+      if (destinationType != FileSystemEntityType.notFound) {
+        if (destinationType != FileSystemEntityType.file &&
+            destinationType != FileSystemEntityType.link) {
+          throw FileSystemException(
+            'Streaming destination must be a regular file or a link to one',
+            destination.path,
+          );
+        }
+        // Resolve links before choosing the staging parent, so the final
+        // rename stays on the target filesystem and leaves the link intact.
+        // Broken links fail here without replacing the link itself.
+        target = File(await destination.resolveSymbolicLinks());
+        final targetStat = await target.stat();
+        if (targetStat.type != FileSystemEntityType.file) {
+          throw FileSystemException(
+            'Streaming destination must resolve to a regular file',
+            destination.path,
+          );
+        }
+        originalMode = targetStat.mode & 0xfff;
+      }
+      stagingDirectory = await target.parent.createTemp('.dartus-download-');
       final partial = File(
         '${stagingDirectory.path}${Platform.pathSeparator}blob',
       );
+      if (originalMode != null) {
+        // Dart has no portable chmod API. Copy the existing file's metadata,
+        // then truncate only this private staging copy. Platforms that do not
+        // preserve its permission bits fail safely before replacement.
+        await target.copy(partial.path);
+        if (((await partial.stat()).mode & 0xfff) != originalMode) {
+          throw FileSystemException(
+            'Cannot preserve streaming destination permissions',
+            destination.path,
+          );
+        }
+      }
       final file = await partial.open(mode: FileMode.write);
       var byteCount = 0;
       try {
@@ -532,14 +577,52 @@ class WalrusClient {
       } finally {
         await file.close();
       }
-      await partial.rename(destination.path);
+      if (await FileSystemEntity.type(destination.path, followLinks: false) !=
+          destinationType) {
+        throw FileSystemException(
+          'Streaming destination changed during download',
+          destination.path,
+        );
+      }
+      if (originalMode != null) {
+        final resolvedPath = await destination.resolveSymbolicLinks();
+        final partialMode = (await partial.stat()).mode & 0xfff;
+        // Read the target's mode last, immediately before replacement, so a
+        // permission change during the download is not silently reverted.
+        final targetStat = await target.stat();
+        if (resolvedPath != target.path ||
+            targetStat.type != FileSystemEntityType.file ||
+            (targetStat.mode & 0xfff) != originalMode ||
+            partialMode != originalMode) {
+          throw FileSystemException(
+            'Streaming destination or permissions changed during download',
+            destination.path,
+          );
+        }
+      }
+      // Never copy into the live destination: a disk/write error there would
+      // destroy its previous contents. Same-filesystem rename is atomic on
+      // POSIX. Callers must prevent concurrent changes to destination paths.
+      await partial.rename(target.path);
       return byteCount;
     } finally {
       try {
         await body.cancel();
       } finally {
         if (stagingDirectory != null) {
-          await stagingDirectory.delete(recursive: true);
+          try {
+            await stagingDirectory.delete(recursive: true);
+          } catch (error, stackTrace) {
+            // Cleanup is best effort; even a user-supplied logging callback
+            // must not replace a successful download or its original error.
+            try {
+              logError(
+                'Failed to remove staging directory ${stagingDirectory.path}',
+                error: error,
+                stackTrace: stackTrace,
+              );
+            } catch (_) {}
+          }
         }
       }
     }

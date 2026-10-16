@@ -286,7 +286,7 @@ void main() {
           CertifyBlobOptions(
             blobId: '12345',
             blobObjectId: '0xblob',
-            deletable: false,
+            deletable: true,
             certificate: cert,
             committeeSize: 10,
           ),
@@ -301,7 +301,7 @@ void main() {
             CertifyBlobOptions(
               blobId: '12345',
               blobObjectId: '0xblob',
-              deletable: false,
+              deletable: true,
               committeeSize: 10,
             ),
           ),
@@ -391,7 +391,7 @@ void main() {
             epochs: 1,
             blobId: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE',
             rootHash: Uint8List(32),
-            deletable: false,
+            deletable: true,
           ),
           walCoinObjectId: '0xwalcoin',
           walType: '0xpkg::wal::WAL',
@@ -411,7 +411,7 @@ void main() {
               epochs: 1,
               blobId: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
               rootHash: Uint8List(16), // Wrong length
-              deletable: false,
+              deletable: true,
             ),
             walCoinObjectId: '0xwalcoin',
             walType: '0xpkg::wal::WAL',

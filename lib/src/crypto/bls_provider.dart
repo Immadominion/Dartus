@@ -26,7 +26,7 @@ abstract class BlsProvider {
   /// Verify a single BLS12-381 min_pk signature.
   ///
   /// - [signature] — 96-byte compressed G2 signature
-  /// - [publicKey] — 48-byte compressed G1 public key
+  /// - [publicKey] — 48-byte compressed or 96-byte uncompressed G1 public key
   /// - [message] — arbitrary-length message bytes
   ///
   /// Returns `true` if the signature is valid.
@@ -44,7 +44,7 @@ abstract class BlsProvider {
   /// Verify an aggregate BLS12-381 min_pk signature where all signers
   /// signed the same [message].
   ///
-  /// - [publicKeys] — list of 48-byte compressed G1 public keys
+  /// - [publicKeys] — list of 48-byte compressed or 96-byte uncompressed G1 public keys
   /// - [message] — the shared message all signers signed
   /// - [aggregateSignature] — 96-byte compressed aggregate G2 signature
   ///
