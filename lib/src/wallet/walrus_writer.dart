@@ -14,6 +14,7 @@ import '../encoding/default_blob_encoder.dart';
 import '../errors/walrus_errors.dart';
 import '../models/protocol_types.dart';
 import '../upload_relay/upload_relay_client.dart';
+import '../utils/quilts.dart';
 import 'transaction_signer.dart';
 import 'walrus_chain_reader.dart';
 
@@ -119,6 +120,44 @@ class WalrusWriter {
     void Function(WalrusWriteStage stage)? onStage,
   }) => writeFlow(
     data,
+    epochs: epochs,
+    deletable: deletable,
+    recipient: recipient,
+  ).run(signer, onStage: onStage);
+
+  /// A step-by-step write of several [files] as one quilt (see
+  /// [writeFiles]).
+  WalrusWriteFilesFlow writeFilesFlow(
+    List<QuiltBlob> files, {
+    required int epochs,
+    bool deletable = true,
+    String? recipient,
+  }) => WalrusWriteFilesFlow._(
+    this,
+    files,
+    epochs: epochs,
+    deletable: deletable,
+    recipient: recipient,
+  );
+
+  /// Store several [files] together as one Walrus quilt: one blob, so one
+  /// payment approval, one certify approval and one storage fee for the
+  /// whole batch. (Every blob pays for at least about 64 MB of encoded
+  /// storage, so a quilt of small files costs a fraction of separate
+  /// blobs.)
+  ///
+  /// Each file comes back with a quilt patch ID, which aggregators serve at
+  /// `/v1/blobs/by-quilt-patch-id/<id>` (`WalrusClient.getQuiltPatch`).
+  /// Identifiers must be unique within the batch.
+  Future<WalrusWriteFilesResult> writeFiles(
+    List<QuiltBlob> files, {
+    required WalrusTransactionSigner signer,
+    required int epochs,
+    bool deletable = true,
+    String? recipient,
+    void Function(WalrusWriteStage stage)? onStage,
+  }) => writeFilesFlow(
+    files,
     epochs: epochs,
     deletable: deletable,
     recipient: recipient,
@@ -390,6 +429,109 @@ class WalrusWriteFlow {
       relayTip: _tip,
     );
   }
+}
+
+/// A write of several files as one quilt, step by step. Like
+/// [WalrusWriteFlow], [run] continues where it stopped after a failure.
+class WalrusWriteFilesFlow {
+  WalrusWriteFilesFlow._(
+    this._writer,
+    List<QuiltBlob> files, {
+    required this.epochs,
+    required this.deletable,
+    this.recipient,
+  }) : files = List.unmodifiable(files) {
+    if (files.isEmpty) throw ArgumentError.value(files, 'files', 'is empty');
+  }
+
+  final WalrusWriter _writer;
+  final List<QuiltBlob> files;
+  final int epochs;
+  final bool deletable;
+  final String? recipient;
+
+  WalrusWriteFlow? _flow;
+  QuiltIndex? _index;
+  int? _shards;
+
+  /// The flow writing the quilt blob, once the quilt is laid out.
+  WalrusWriteFlow? get blobFlow => _flow;
+
+  /// Perform the remaining steps with [signer], reporting each stage.
+  Future<WalrusWriteFilesResult> run(
+    WalrusTransactionSigner signer, {
+    void Function(WalrusWriteStage stage)? onStage,
+  }) async {
+    final flow = await _quiltFlow();
+    final result = await flow.run(signer, onStage: onStage);
+    return WalrusWriteFilesResult(
+      quilt: result,
+      files: [
+        for (final patch in _index!.patches)
+          WalrusStoredFile(
+            identifier: patch.identifier,
+            tags: patch.tags,
+            patchId: encodeQuiltPatchId(
+              quiltBlobId: result.blobId,
+              version: 1,
+              startIndex: patch.startIndex,
+              endIndex: patch.endIndex,
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// The quilt layout depends on the shard count, so it is redone if that
+  /// changed before the blob was registered.
+  Future<WalrusWriteFlow> _quiltFlow() async {
+    final existing = _flow;
+    if (existing != null && existing.registerDigest != null) return existing;
+    final shards = (await _writer.chain.system()).nShards;
+    if (existing != null && _shards == shards) return existing;
+    final quilt = encodeQuilt(blobs: files, numShards: shards);
+    _index = quilt.index;
+    _shards = shards;
+    return _flow = _writer.writeFlow(
+      quilt.quilt,
+      epochs: epochs,
+      deletable: deletable,
+      recipient: recipient,
+    );
+  }
+}
+
+/// One file of a quilt.
+@immutable
+class WalrusStoredFile {
+  const WalrusStoredFile({
+    required this.identifier,
+    required this.patchId,
+    required this.tags,
+  });
+
+  final String identifier;
+
+  /// Reads this file alone: `/v1/blobs/by-quilt-patch-id/<patchId>`.
+  final String patchId;
+
+  final Map<String, String> tags;
+}
+
+/// A certified quilt and its files.
+@immutable
+class WalrusWriteFilesResult {
+  const WalrusWriteFilesResult({required this.quilt, required this.files});
+
+  /// The quilt blob's write (its object, digests and cost).
+  final WalrusWriteResult quilt;
+
+  /// One entry per file, in quilt order.
+  final List<WalrusStoredFile> files;
+
+  /// The file stored under [identifier].
+  WalrusStoredFile file(String identifier) =>
+      files.firstWhere((f) => f.identifier == identifier);
 }
 
 /// What a write will cost.

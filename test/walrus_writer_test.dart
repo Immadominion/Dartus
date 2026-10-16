@@ -18,6 +18,7 @@ const _packageId =
 const _typeOrigin =
     '0x00000000000000000000000000000000000000000000000000000000000000ab';
 const _walType = '0x8::wal::WAL';
+const _blobId = 'M4hsZGQ1oCktdzegB6HnI1Mx0p2v6V1mtJmzv1FwUMg';
 
 final _snapshot = WalrusSystemSnapshot(
   epoch: 100,
@@ -109,7 +110,7 @@ void main() {
     expect(certify.moveCalls, ['$_packageId::system::certify_blob']);
     expect(certify.transferredTo, isEmpty);
 
-    expect(result.blobId, 'blob-id');
+    expect(result.blobId, _blobId);
     expect(result.blobObjectId, _blobObject);
     expect(result.registerDigest, 'register-digest');
     expect(result.certifyDigest, 'certify-digest');
@@ -230,6 +231,51 @@ void main() {
       final first = await flow.run(signer);
       expect(await flow.run(signer), same(first));
       expect(signer.signed, hasLength(2));
+    });
+  });
+
+  group('writeFiles', () {
+    test('stores a batch as one quilt with two approvals', () async {
+      final files = [
+        QuiltBlob(identifier: 'b.txt', contents: Uint8List.fromList([2])),
+        QuiltBlob(
+          identifier: 'a.jpg',
+          contents: Uint8List.fromList([1, 1]),
+          tags: const {'type': 'image/jpeg'},
+        ),
+      ];
+      final result = await writer.writeFiles(files, signer: signer, epochs: 3);
+
+      expect(signer.signed, hasLength(2));
+      expect(relay.writes, hasLength(1));
+      expect(result.files.map((f) => f.identifier), ['a.jpg', 'b.txt']);
+      expect(result.file('a.jpg').tags, {'type': 'image/jpeg'});
+      for (final file in result.files) {
+        final id = parseQuiltPatchId(file.patchId);
+        expect(id.quiltId, _blobId);
+        expect(id.version, 1);
+        expect(id.endIndex, greaterThan(id.startIndex));
+      }
+    });
+
+    test('needs at least one file', () {
+      expect(
+        () => writer.writeFilesFlow(const [], epochs: 1),
+        throwsArgumentError,
+      );
+    });
+
+    test('a failed batch continues without paying twice', () async {
+      final flow = writer.writeFilesFlow([
+        QuiltBlob(identifier: 'a', contents: Uint8List(1)),
+      ], epochs: 1);
+      relay.failNext = true;
+      await expectLater(flow.run(signer), throwsA(isA<UploadRelayError>()));
+      await flow.run(signer);
+      expect(signer.signed.map((t) => t.description), [
+        'Register Walrus blob',
+        'Certify Walrus blob',
+      ]);
     });
   });
 
@@ -432,7 +478,7 @@ class _FakeChain implements WalrusChainReader {
   Future<WalrusBlobObject> blobObject(String objectId) async =>
       WalrusBlobObject(
         objectId: objectId,
-        blobId: 'blob-id',
+        blobId: _blobId,
         size: 12,
         registeredEpoch: 100,
         certifiedEpoch: 100,

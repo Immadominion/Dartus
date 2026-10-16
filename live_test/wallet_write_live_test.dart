@@ -20,28 +20,37 @@ import 'package:sui/sui.dart';
 import 'package:test/test.dart';
 
 void main() {
+  final env = Platform.environment;
+  final network = WalrusNetwork.values.byName(
+    env['DARTUS_LIVE_NETWORK'] ?? 'testnet',
+  );
+  final aggregator = switch (network) {
+    WalrusNetwork.testnet => 'https://aggregator.walrus-testnet.walrus.space',
+    WalrusNetwork.mainnet => 'https://aggregator.walrus-mainnet.walrus.space',
+  };
+
+  late WalrusWriter writer;
+  late KeypairTransactionSigner signer;
+
+  setUp(() {
+    expect(
+      env['DARTUS_RUN_LIVE_WRITES'],
+      'true',
+      reason: 'Set DARTUS_RUN_LIVE_WRITES=true to authorize a paid write',
+    );
+    final seed = env['DARTUS_LIVE_ED25519_SEED'];
+    expect(seed, isNotNull, reason: 'Set DARTUS_LIVE_ED25519_SEED');
+    writer = WalrusWriter(network: network);
+    addTearDown(writer.close);
+    final account = SuiAccount(
+      Ed25519Keypair.fromSeed(Uint8List.fromList(_hex(seed!))),
+    );
+    signer = KeypairTransactionSigner(account, writer.chain.sui);
+  });
+
   test(
     'a keypair pays for, registers, uploads and certifies a blob it owns',
     () async {
-      final env = Platform.environment;
-      expect(
-        env['DARTUS_RUN_LIVE_WRITES'],
-        'true',
-        reason: 'Set DARTUS_RUN_LIVE_WRITES=true to authorize a paid write',
-      );
-      final seed = env['DARTUS_LIVE_ED25519_SEED'];
-      expect(seed, isNotNull, reason: 'Set DARTUS_LIVE_ED25519_SEED');
-      final network = WalrusNetwork.values.byName(
-        env['DARTUS_LIVE_NETWORK'] ?? 'testnet',
-      );
-
-      final writer = WalrusWriter(network: network);
-      addTearDown(writer.close);
-      final account = SuiAccount(
-        Ed25519Keypair.fromSeed(Uint8List.fromList(_hex(seed!))),
-      );
-      final signer = KeypairTransactionSigner(account, writer.chain.sui);
-
       final bytes = Uint8List.fromList(
         utf8.encode('Dartus wallet write ${DateTime.now().toIso8601String()}'),
       );
@@ -83,6 +92,68 @@ void main() {
         'Stored ${result.blobId} as ${result.blobObjectId} '
         '(register ${result.registerDigest}, certify ${result.certifyDigest}); '
         'paid ${estimate.cost.total} FROST + ${result.relayTip} MIST tip',
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'several files go up as one quilt and each reads back on its own',
+    () async {
+      final stamp = DateTime.now().toIso8601String();
+      final files = [
+        QuiltBlob(
+          identifier: 'notes.txt',
+          contents: Uint8List.fromList(utf8.encode('Notes $stamp')),
+        ),
+        QuiltBlob(
+          identifier: 'photo.bin',
+          contents: Uint8List.fromList(List.generate(3000, (i) => i % 251)),
+          tags: const {'type': 'image/jpeg'},
+        ),
+        QuiltBlob(identifier: 'empty.txt', contents: Uint8List(0)),
+      ];
+      final approvals = <String>[];
+      final counting = WalletTransactionSigner(
+        address: signer.address,
+        execute: (tx) {
+          approvals.add(tx.description);
+          return signer.signAndExecute(tx);
+        },
+      );
+
+      final result = await writer.writeFiles(
+        files,
+        signer: counting,
+        epochs: 1,
+      );
+
+      expect(approvals, hasLength(2));
+      expect(result.quilt.blob.owner, signer.address);
+      expect(result.quilt.blob.isCertified, isTrue);
+      expect(result.files.map((f) => f.identifier).toSet(), {
+        'notes.txt',
+        'photo.bin',
+        'empty.txt',
+      });
+      expect(result.file('photo.bin').tags, {'type': 'image/jpeg'});
+
+      final reader = WalrusClient(
+        publisherBaseUrl: Uri.parse(aggregator),
+        aggregatorBaseUrl: Uri.parse(aggregator),
+      );
+      addTearDown(reader.close);
+      for (final file in files) {
+        final patchId = result.file(file.identifier).patchId;
+        expect(
+          await reader.getQuiltPatch(patchId),
+          file.contents,
+          reason: '${file.identifier} via $patchId',
+        );
+      }
+      print(
+        'Quilt ${result.quilt.blobId} (${result.quilt.blobObjectId}) holds '
+        '${result.files.map((f) => '${f.identifier}=${f.patchId}').join(', ')}',
       );
     },
     timeout: const Timeout(Duration(minutes: 3)),

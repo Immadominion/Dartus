@@ -270,6 +270,27 @@ class WalrusClient {
     return bytes;
   }
 
+  /// Loads one file of a quilt by its quilt patch ID (as returned by
+  /// `WalrusWriter.writeFiles`), from the cache or the aggregator's
+  /// `/v1/blobs/by-quilt-patch-id/` route. A patch ID names fixed bytes, so
+  /// results are cached like blobs.
+  Future<Uint8List> getQuiltPatch(String patchId) async {
+    final cached = await cache.get(patchId);
+    if (cached != null) {
+      logInfo('Cache hit for quilt patch $patchId');
+      return cached;
+    }
+    final uri = _aggregatorUri('v1/blobs/by-quilt-patch-id/$patchId');
+    final response = await _executor.send(method: 'GET', uri: uri);
+    final bytes = await _readBinaryResponse(
+      response,
+      context: 'Error retrieving quilt patch: $patchId',
+      cacheKey: patchId,
+    );
+    logInfo('Fetched ${bytes.length} bytes for quilt patch $patchId');
+    return bytes;
+  }
+
   /// Loads a blob from the cache or aggregator, caching misses for reuse.
   Future<Uint8List> getBlob(String blobId) async {
     final cached = await cache.get(blobId);
