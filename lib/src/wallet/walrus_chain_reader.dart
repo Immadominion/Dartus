@@ -209,9 +209,13 @@ class WalrusChainReader {
     final fields = _map(system.json.toProto3Json(), 'system object');
     final version = _int(fields['version'], 'system version');
 
-    // The inner state is a dynamic field keyed by the version (a u64).
-    final key = Uint8List(8)
-      ..buffer.asByteData().setUint64(0, version, Endian.little);
+    // The inner state is a dynamic field keyed by the version, a BCS u64
+    // (little-endian). Written byte by byte: ByteData.setUint64 does not
+    // exist when Flutter compiles to JavaScript.
+    final key = Uint8List(8);
+    for (var i = 0, v = version; i < 8; i++, v >>= 8) {
+      key[i] = v & 0xff;
+    }
     final inner = await sui.getDynamicFieldObject(
       packageConfig.systemObjectId,
       'u64',
