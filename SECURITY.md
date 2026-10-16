@@ -15,9 +15,12 @@ Do not put private vulnerability details in a public GitHub issue. GitHub privat
 | Default `WalrusClient` over HTTPS | Uses `package:http` with platform certificate validation. `useSecureConnection` is a compatibility no-op, regardless of its value. |
 | Injected `WalrusClient.httpClient` | Uses the supplied client's transport and certificate policy. Dartus cannot establish its safety. |
 | `WalrusDirectClient` storage-node connections | Its shared `HttpClient` accepts invalid certificates through `badCertificateCallback`, leaving these connections vulnerable to interception. |
-| Standalone `StorageNodeClient` / `UploadRelayClient` | Their own default `HttpClient` keeps normal certificate checks. A supplied storage-node client may use a different policy. |
+| Standalone `StorageNodeClient` | Its own default `HttpClient` keeps normal certificate checks. A supplied client may use a different policy. |
+| `UploadRelayClient` and `WalrusWriter` | `package:http` with platform certificate validation (the browser on the web). An injected `http.Client` sets its own policy. Chain reads use `package:sui`'s gRPC-web client over HTTPS. |
 
 The SDK accepts HTTP URLs too; certificate validation does not make an HTTP URL encrypted. Use HTTPS for remote services. The HTTP compatibility flag does not change the direct client's insecure certificate behavior.
+
+`WalrusWriter` hands wallets a transaction to approve; the wallet shows the person what they pay and signs it, and Dartus never holds the person's key. It checks effects and reads the certified Blob object back, but servers that list wallet-stored files must still verify the Blob object on chain themselves. `KeypairTransactionSigner` holds a key in memory and is meant for scripts and tests.
 
 Direct operation also needs further validation of its Sui transport, registration/certification flow, BLS configuration, and encoded metadata. API examples and unit tests do not establish that those paths can safely complete a mainnet upload.
 

@@ -7,7 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Planned as 0.4.0: storage paid for by the person's own wallet, on Flutter
+web and natively.
+
+### Added
+
+- `WalrusWriter`: register, upload through the upload relay, and certify a
+  blob with the signer paying WAL, gas and the relay tip. Two wallet
+  approvals per write; the Blob object goes to the signer or a `recipient`.
+  `WalrusWriteFlow.run` continues after a declined approval or a failed
+  upload without registering or paying twice. `estimate` prices a write;
+  `InsufficientWalBalanceError` is raised before the wallet is asked.
+- `WalrusWriter.writeFiles`: several files as one quilt (two approvals and
+  one storage fee per batch), with a quilt patch ID per file.
+  `WalrusClient.getQuiltPatch` reads one file by patch ID.
+- `WalletTransaction` (the JSON wallets take for
+  `sui:signAndExecuteTransaction`, with WAL and tip intents resolved),
+  `WalrusTransactionSigner`, `WalletTransactionSigner` and
+  `KeypairTransactionSigner`.
+- `WalrusChainReader`: Walrus system state, Blob objects, created objects
+  and balances over Sui gRPC-web.
+- `WalrusTransactionBuilder.addRegisterBlob`, paying with exact-amount WAL
+  `CoinWithBalance` intents, as the TS SDK's `registerBlob()`.
+- Blob metadata on Flutter web from Mysten's `walrus-wasm` 0.3.1 (bundled as
+  package assets, Apache-2.0) in a module Web Worker; `createDefaultBlobEncoder`
+  picks walrus-wasm on the web and `libwalrus_ffi` natively.
+- `WalrusNetwork.walCoinType`, `suiChain`, and a default mainnet relay URL.
+- `UploadRelayError` for relay refusals, with status and message.
+
+### Changed (breaking)
+
+- Requires `sui` ^0.5.1 (gRPC-web and GraphQL clients; pointycastle 4).
+  Sui's public JSON-RPC is shut down; `WalrusDirectClient` still uses it
+  and does not work against public full nodes until it moves to gRPC.
+- `TipStrategy.calculateTip` and `UploadRelayTipConfig.calculateTip` take the
+  **encoded** size; `sendUploadRelayTip` takes `encodedSize`. A tip above
+  `max` now throws instead of being capped.
+- `WalrusNetwork.defaultUploadRelayUrl` is non-null (mainnet has a relay).
+
 ### Fixed
+
+- Linear relay tips were computed from the unencoded size, underpaying the
+  mainnet relay, which then refused uploads after WAL had been spent.
+- `UploadRelayClient` used `dart:io` and could not run on Flutter web; it now
+  uses `package:http` and accepts an `http.Client` (for upload progress).
+- Quilt file identifiers are written and read as BCS strings. Aggregators
+  could not read Dartus quilts ("invalid identifier"); vectors from
+  `@mysten/walrus` now match byte for byte.
 
 - `WalrusClient.getBlobByObjectId` now uses the aggregator's
   `/v1/blobs/by-object-id/{objectId}` route so Sui object IDs are resolved

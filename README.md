@@ -6,20 +6,21 @@
 [![pub points](https://img.shields.io/pub/points/dartus)](https://pub.dev/packages/dartus/score)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Dartus is a Dart/Flutter SDK for [Walrus](https://walrus.xyz) blob storage. It provides publisher uploads, aggregator downloads, wallet transaction builders, quilts, and native erasure coding.
+Dartus is a Dart/Flutter SDK for [Walrus](https://walrus.xyz) blob storage. It provides wallet-paid writes through an upload relay (Flutter web and native), publisher uploads, aggregator downloads, wallet transaction builders, quilts, and native erasure coding.
 
 ## Choose an API
 
 | API | Import | Runtime and requirements |
 |-----|--------|--------------------------|
-| HTTP bytes: `WalrusClient.putBlob` / `getBlob` | `package:dartus/dartus.dart` | Native or Flutter web; publisher and aggregator endpoints |
+| Wallet writes: `WalrusWriter.write` / `writeFiles` | `package:dartus/dartus.dart` | Native or Flutter web; the signer's wallet pays (WAL for storage, SUI for gas and the relay tip); upload relay; Sui gRPC-web |
+| HTTP bytes: `WalrusClient.putBlob` / `getBlob` / `getQuiltPatch` | `package:dartus/dartus.dart` | Native or Flutter web; publisher and aggregator endpoints |
 | HTTP files: `putBlobFromFile`, `putBlobStreaming`, `getBlobAsFile`, `getBlobAsFileStreaming` | `package:dartus/dartus.dart` | Native only; uses `dart:io` files |
 | Relay/direct: `WalrusDirectClient` and write flows | `package:dartus/direct.dart` | Native only; Sui client, wallet for writes, and valid encoding metadata |
 | Built-in encoding: `WalrusBlobEncoder` | `package:dartus/direct.dart` | Native `libwalrus_ffi` required for encoding and decoding |
 
-The HTTP publisher operator pays on-chain storage costs and may require authentication or charge for its service. Direct and relay writes use the user's wallet for SUI gas and WAL storage costs. A relay accepts the raw blob, but registration still needs valid metadata; the built-in metadata encoder uses FFI too.
+The HTTP publisher operator pays on-chain storage costs and may require authentication or charge for its service. `WalrusWriter` and the direct and relay writes use the user's wallet for SUI gas and WAL storage costs. A relay accepts the raw blob, but registration still needs valid metadata; the built-in metadata encoder uses FFI too.
 
-The current direct paths still require work on Sui transport, certification, and metadata, and the direct storage-node HTTP client accepts invalid TLS certificates. Treat the native examples below as API examples, not a claim of mainnet readiness. See [SECURITY.md](SECURITY.md).
+The current direct paths (`WalrusDirectClient`) still use Sui JSON-RPC, which public full nodes no longer serve, and need work on certification and metadata; and the direct storage-node HTTP client accepts invalid TLS certificates. Treat the native examples below as API examples, not a claim of mainnet readiness. See [SECURITY.md](SECURITY.md).
 
 ## Installation
 
@@ -30,7 +31,7 @@ dependencies:
   dartus: ^0.3.0
 ```
 
-If your app imports Sui types directly, also declare `sui: ^0.3.7` under dependencies. Then run:
+If your app imports Sui types directly, also declare `sui: ^0.5.1` under dependencies. Then run:
 
 ```bash
 flutter pub get
@@ -92,6 +93,39 @@ Future<void> downloadToFile(
   File destination,
 ) => client.getBlobAsFileStreaming(blobId: blobId, destination: destination);
 ```
+
+## Wallet writes (Flutter web and native)
+
+`WalrusWriter` stores a blob with every cost paid by the person's wallet: WAL for storage, SUI for gas and the upload relay's tip. There is no publisher and no server key. A write takes two approvals:
+1. register the blob and pay for it;
+2. the bytes go to Mysten's upload relay;
+3. certify it.
+
+The `Blob` object belongs to the signer, or to a `recipient` you name.
+
+```dart
+final writer = WalrusWriter(network: WalrusNetwork.testnet);
+final estimate = await writer.estimate(size: bytes.length, epochs: 5);
+final result = await writer.write(
+  bytes,
+  epochs: 5,
+  signer: WalletTransactionSigner(
+    address: account.address,
+    execute: (tx) async => (await wallet.signAndExecuteTransaction(tx.json)).digest,
+  ),
+  onStage: (stage) => print(stage), // encoding, registering, uploading, certifying
+);
+print('${result.blobId} is owned by ${result.blob.owner}');
+```
+
+- **Wallets:** a wallet receives `tx.json`, the serialized form `@mysten/sui`'s dApp Kit hands to `sui:signAndExecuteTransaction`. WAL and the SUI tip are already resolved against the signer's coins and address balance, and the wallet adds gas. `sui_wallet_web` provides `signAndExecuteTransaction` for Flutter web. Scripts and tests can use `KeypairTransactionSigner`.
+- **Several files:** `writeFiles` stores a batch as one Walrus quilt: one blob, so two approvals and one storage fee for the whole batch. Every blob pays for at least about 64 MB of encoded storage, so this is far cheaper for small files. Each file gets a patch ID; read it with `WalrusClient.getQuiltPatch(patchId)`. The relay accepts one blob per paid transaction, so a quilt is the way to batch.
+- **Retrying:** keep the `WalrusWriteFlow` from `writeFlow(...)` (or `writeFilesFlow`). `run(signer)` continues after a declined approval or a failed upload without registering or paying twice. Too little WAL fails before the wallet is asked (`InsufficientWalBalanceError`).
+- **On the web:** blob metadata comes from Mysten's `walrus-wasm`, running in a Web Worker so the page stays responsive. Flutter bundles the files from `assets/walrus_wasm/` (Apache-2.0; see its README). If your page sends a Content-Security-Policy, allow `worker-src blob:`, `script-src 'self' 'wasm-unsafe-eval'`, and `connect-src` for the Sui full node and the relay. Natively, metadata comes from `libwalrus_ffi` (see below).
+- **Chain reads:** these use Sui's gRPC-web API (`package:sui` 0.5), with CORS open for browsers. `WalrusChainReader` also exposes balances, Blob objects and system state.
+- **Mainnet:** `WalrusNetwork.mainnet`, with Mysten's mainnet relay (its tip is priced per encoded KiB).
+
+More in [tool/quickstart_wallet.dart](tool/quickstart_wallet.dart). Servers that list what people stored should check the Blob object on Sui (certified, owned by the right address) rather than trust the browser.
 
 ## Native encoding setup
 
@@ -183,7 +217,7 @@ WalrusFile createTextFile() => WalrusFile.from(
 );
 ```
 
-Use `writeFiles` to upload a list as a quilt, and `getBlob` / `WalrusBlob.files()` to read a quilt. Local `WalrusFile.bytes()`, `.text()`, `.json()`, and `.getTags()` expose the content and metadata.
+Use `writeFiles` (direct mode) or `WalrusWriter.writeFiles` (wallet writes) to upload a list as a quilt, and `getBlob` / `WalrusBlob.files()` or `WalrusClient.getQuiltPatch` to read a quilt. Local `WalrusFile.bytes()`, `.text()`, `.json()`, and `.getTags()` expose the content and metadata.
 
 ## TLS, authentication, and upload policy
 
@@ -206,10 +240,10 @@ dart format --output=none --set-exit-if-changed lib test live_test tool
 
 The default suite is deterministic and blocks external HTTP requests; controlled loopback servers and injected responses are allowed. Use Flutter's runner because some exported dependencies require `dart:ui`. Plain `dart test` works for isolated pure-Dart suites, but does not run the entire package.
 
-Browser HTTP and memory-cache checks (Chrome must be installed):
+Browser checks (Chrome must be installed): HTTP, memory cache, and `walrus-wasm` metadata against TS SDK vectors:
 
 ```bash
-flutter test --no-pub --platform chrome test/browser/http_browser_test.dart test/cache_regression_test.dart
+flutter test --no-pub --platform chrome test/browser/ test/cache_regression_test.dart
 ```
 
 Optional live reads are outside `test/`. Set `DARTUS_LIVE_AGGREGATOR`, `DARTUS_LIVE_BLOB_ID`, and `DARTUS_LIVE_EXPECTED_TEXT` to an existing fixture, then run:
@@ -218,7 +252,15 @@ Optional live reads are outside `test/`. Set `DARTUS_LIVE_AGGREGATOR`, `DARTUS_L
 flutter test --no-pub live_test/http_live_read_test.dart --tags integration
 ```
 
-Live upload checks require separate explicit opt-in and a writable endpoint. See [CONTRIBUTING.md](CONTRIBUTING.md) for those commands and the expected environment. No live upload is part of CI. Passing tests or analysis is not a security audit or proof of a working mainnet transaction.
+A live wallet write spends real WAL and SUI from a throwaway key you provide (a single blob and a three-file quilt, about 0.001 WAL on testnet):
+
+```bash
+DARTUS_RUN_LIVE_WRITES=true DARTUS_LIVE_NETWORK=testnet \
+DARTUS_LIVE_ED25519_SEED=<32-byte hex seed> \
+flutter test --no-pub live_test/wallet_write_live_test.dart
+```
+
+Live publisher upload checks require separate explicit opt-in and a writable endpoint. See [CONTRIBUTING.md](CONTRIBUTING.md) for those commands and the expected environment. No live upload is part of CI. Passing tests or analysis is not a security audit or proof of a working mainnet transaction.
 
 ## Examples and API documentation
 

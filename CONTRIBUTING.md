@@ -53,8 +53,8 @@ lib/
     constants/             # Network presets (testnet/mainnet package IDs)
     contracts/             # WalrusTransactionBuilder — Sui Move call construction
     crypto/                # BLS12-381 provider interface + bls_dart adapter
-    encoding/              # WalrusBlobEncoder (Rust FFI), BCS parser,
-                           # encoding abstractions
+    encoding/              # WalrusBlobEncoder (Rust FFI), WasmBlobEncoder
+                           # (web), BCS parser, encoding abstractions
     errors/                # Typed error hierarchy (18+ classes)
     files/                 # WalrusFile, WalrusBlob, readers (quilt, blob)
     logging/               # Shared log utilities
@@ -62,6 +62,7 @@ lib/
     network/               # RequestExecutor — shared HTTP with timeout/TLS
     storage_node/          # StorageNodeClient — sliver read/write
     upload_relay/          # UploadRelayClient — relay encoding + tips
+    wallet/                # WalrusWriter, signers, WalrusChainReader (gRPC)
     utils/                 # blob ID utils, encoding utils, quilts,
                            # randomness, retry, object data loader
 ```
@@ -106,7 +107,13 @@ The upload check requires `DARTUS_LIVE_PUBLISHER`, `DARTUS_LIVE_AGGREGATOR`, and
 flutter test --no-pub live_test/http_live_upload_test.dart --tags live-write
 ```
 
-Each live command selects one test and fails on missing configuration or request errors. Neither runs in CI. A passing mock suite is not evidence of a live mainnet roundtrip. Browser verification covers JavaScript, not Wasm or native encoding.
+The wallet write check spends WAL and SUI from a throwaway key (`DARTUS_RUN_LIVE_WRITES=true`, `DARTUS_LIVE_ED25519_SEED`, optional `DARTUS_LIVE_NETWORK`):
+
+```bash
+flutter test --no-pub live_test/wallet_write_live_test.dart --tags live-write
+```
+
+Each live command fails on missing configuration or request errors. None runs in CI. A passing mock suite is not evidence of a live mainnet roundtrip. Browser tests run the dart2js build, including `walrus-wasm` metadata in a Web Worker; they do not cover dart2wasm or native encoding.
 
 ## Code Style
 
