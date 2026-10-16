@@ -24,7 +24,7 @@ dependencies:
   ffi: ^2.1.4
   http: ^1.2.0
   meta: ^1.16.0
-  sui: ^0.3.7
+  sui: ^0.5.1
 
 dev_dependencies:
   flutter_test:
