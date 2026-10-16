@@ -211,11 +211,12 @@ EncodeQuiltResult encodeQuilt({
   final blobMetadataList = <Uint8List>[];
   for (var i = 0; i < sortedBlobs.length; i++) {
     final blob = sortedBlobs[i];
-    final identifierBytes = utf8.encode(blob.identifier);
-
-    if (identifierBytes.length > kMaxBlobIdentifierBytesLength) {
+    if (utf8.encode(blob.identifier).length > kMaxBlobIdentifierBytesLength) {
       throw ArgumentError('Blob identifier too long: ${blob.identifier}');
     }
+    // A BCS string: ULEB128 length, then UTF-8 (TS: bcs.string()). The
+    // u16 size written before it counts both.
+    final identifierBytes = _bcsString(blob.identifier);
 
     var metadataSize =
         kQuiltPatchBlobHeaderSize +
@@ -585,6 +586,14 @@ int _writeBlobToQuilt({
 /// Format: u32 count, then for each entry:
 ///   u32 key_len, key_bytes, u32 value_len, value_bytes
 /// Sorted by key for deterministic serialization.
+Uint8List _bcsString(String value) {
+  final bytes = utf8.encode(value);
+  final builder = BytesBuilder(copy: false);
+  _writeUleb128(builder, bytes.length);
+  builder.add(bytes);
+  return builder.toBytes();
+}
+
 Uint8List _serializeQuiltPatchTags(Map<String, String> tags) {
   final sortedKeys = tags.keys.toList()..sort();
   final builder = BytesBuilder(copy: false);

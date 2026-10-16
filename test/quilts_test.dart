@@ -7,11 +7,14 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:dartus/src/utils/encoding_utils.dart';
 import 'package:dartus/src/utils/quilts.dart';
 import 'package:test/test.dart';
 
 void main() {
+  _referenceQuiltVectors();
+
   group('computeSymbolSize', () {
     test('returns a valid symbol size for simple inputs', () {
       final result = computeSymbolSize(
@@ -196,5 +199,59 @@ void main() {
       );
       expect(id1, isNot(equals(id2)));
     });
+  });
+}
+
+/// Quilts produced by `@mysten/walrus` 1.2.35's `encodeQuilt` (1000 shards).
+/// Aggregators parse quilts with the Rust implementation; byte-identical
+/// output to the TS SDK keeps every patch readable.
+void _referenceQuiltVectors() {
+  final text = utf8.encode;
+  final cases = {
+    'three files, tags and an empty file': (
+      [
+        QuiltBlob(
+          identifier: 'notes.txt',
+          contents: Uint8List.fromList(text('Notes for the quilt test')),
+        ),
+        QuiltBlob(
+          identifier: 'photo.bin',
+          contents: Uint8List.fromList(List.generate(3000, (i) => i % 251)),
+          tags: const {'type': 'image/jpeg', 'b': 'second'},
+        ),
+        QuiltBlob(identifier: 'empty.txt', contents: Uint8List(0)),
+      ],
+      'd4f8d0cb3e67cb7b48c4e626796ca79a106bf8b0789f93e9da1e850376b9e162',
+      [('empty.txt', 1, 2), ('notes.txt', 2, 3), ('photo.bin', 3, 8)],
+    ),
+    'a non-ASCII identifier and a 100 kB file': (
+      [
+        QuiltBlob(
+          identifier: 'Ọlá Adébáyọ̀.txt',
+          contents: Uint8List.fromList(text('Yoruba name')),
+        ),
+        QuiltBlob(
+          identifier: 'a',
+          contents: Uint8List(100000)..fillRange(0, 100000, 7),
+        ),
+      ],
+      '5b50d9d5ad730eacdb47fb7204db443a766b67a873bce39cd52322e7a4d16c1a',
+      [('a', 1, 151), ('Ọlá Adébáyọ̀.txt', 151, 152)],
+    ),
+  };
+
+  group('matches the TS SDK byte for byte', () {
+    for (final MapEntry(key: name, value: (blobs, sha, patches))
+        in cases.entries) {
+      test(name, () {
+        final result = encodeQuilt(blobs: blobs, numShards: 1000);
+        expect(result.quilt.length, 445556);
+        expect(sha256.convert(result.quilt).toString(), sha);
+        expect([
+          for (final p in result.index.patches)
+            (p.identifier, p.startIndex, p.endIndex),
+        ], patches);
+      });
+    }
   });
 }

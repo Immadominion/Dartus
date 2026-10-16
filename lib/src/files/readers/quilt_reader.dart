@@ -250,13 +250,21 @@ class QuiltReader {
     blobSize -= 2 + identifierLength;
     offset += 2;
 
-    // Read identifier bytes.
+    // The identifier is a BCS string (ULEB128 length, then UTF-8), as the
+    // TS SDK's `bcs.string()` and Walrus's Rust code write it.
     final identifierBytes = await _readBytes(
       sliverIndex,
       identifierLength,
       offset,
     );
-    final identifier = utf8.decode(identifierBytes);
+    final (stringLength, prefixLength) = _readUleb128(identifierBytes, 0);
+    final identifier = utf8.decode(
+      Uint8List.sublistView(
+        identifierBytes,
+        prefixLength,
+        prefixLength + stringLength,
+      ),
+    );
     offset += identifierLength;
 
     // Read tags if present.
