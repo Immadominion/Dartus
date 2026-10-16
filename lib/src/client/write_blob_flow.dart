@@ -167,6 +167,7 @@ class WriteBlobFlow {
   // State
   _FlowStep _step = _FlowStep.initial;
   BlobMetadata? _metadata;
+  int? _shardCount; // Shard count the metadata was computed for.
   EncodedBlob? _encodedBlob;
   String? _blobObjectId;
   ProtocolMessageCertificate? _certificate;
@@ -227,11 +228,13 @@ class WriteBlobFlow {
         effectiveShards = state.nShards;
       }
       if (effectiveShards == 0) effectiveShards = 1000;
+      _shardCount = effectiveShards;
       _metadata = await walrusEncoder.computeMetadata(_blob, effectiveShards);
     } else if (_encoder != null) {
       // Direct mode: if encoder is WalrusBlobEncoder, do full encode
       // and produce slivers for storage node distribution.
       final effectiveShards = _committee?.numShards ?? _numShards ?? 1000;
+      _shardCount = effectiveShards;
 
       if (_encoder is WalrusBlobEncoder) {
         final walrusEncoder = _encoder;
@@ -244,6 +247,7 @@ class WriteBlobFlow {
     } else if (_directClient != null && _committee != null) {
       // Direct mode with default encoder.
       final walrusEncoder = WalrusBlobEncoder();
+      _shardCount = _committee.numShards;
       final encoded = walrusEncoder.encodeBlob(_blob, _committee.numShards);
       _encodedBlob = encoded;
       _metadata = await walrusEncoder.computeMetadata(
@@ -289,6 +293,7 @@ class WriteBlobFlow {
       final tipConfig = _tipConfig;
       _txBuilder.sendUploadRelayTip(
         size: _blob.length,
+        encodedSize: encodedBlobLength(_blob.length, _shardCount ?? 1000),
         blobDigest: metadata.blobDigest,
         nonce: metadata.nonce,
         tipConfig: tipConfig,

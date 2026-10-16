@@ -36,6 +36,27 @@ class WalrusClientError implements Exception {
       message.isEmpty ? 'WalrusClientError' : 'WalrusClientError: $message';
 }
 
+/// The upload relay answered with a non-2xx status.
+class UploadRelayError extends WalrusClientError {
+  /// HTTP status code.
+  final int statusCode;
+
+  /// Response body as text (the relay sends a plain or JSON message).
+  final String body;
+
+  /// The request that failed. Query parameters hold no secrets.
+  final Uri uri;
+
+  UploadRelayError({
+    required this.statusCode,
+    required this.body,
+    required this.uri,
+  }) : super('Upload relay returned $statusCode for ${uri.path}: $body');
+
+  @override
+  String toString() => 'UploadRelayError: $message';
+}
+
 /// A [WalrusClientError] subclass that indicates the operation may succeed
 /// if retried (e.g. after an epoch change or transient node failure).
 class RetryableWalrusClientError extends WalrusClientError {

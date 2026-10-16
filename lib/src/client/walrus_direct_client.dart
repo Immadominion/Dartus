@@ -234,10 +234,7 @@ class WalrusDirectClient {
       walrusPackageId: walrusPackageId,
       suiClient: suiClient ?? SuiClient(network.defaultRpcUrl),
       uploadRelayConfig:
-          uploadRelay ??
-          (network.defaultUploadRelayUrl != null
-              ? UploadRelayConfig(host: network.defaultUploadRelayUrl!)
-              : null),
+          uploadRelay ?? UploadRelayConfig(host: network.defaultUploadRelayUrl),
       encoder: encoder,
       blsProvider: blsProvider,
       logLevel: logLevel,
@@ -2666,6 +2663,7 @@ class WalrusDirectClient {
     if (_relayClient != null && _tipConfig != null) {
       txBuilder.sendUploadRelayTip(
         size: blob.length,
+        encodedSize: encodedSize,
         blobDigest: metadata.blobDigest,
         nonce: metadata.nonce,
         tipConfig: _tipConfig!,

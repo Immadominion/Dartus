@@ -4,14 +4,18 @@
 /// server-side, distributes slivers to storage nodes, and returns
 /// a [ProtocolMessageCertificate] for on-chain certification.
 ///
-/// Mirrors the TS SDK's `UploadRelayClient` class.
+/// Built on `package:http`, so it works on the Dart VM, Flutter mobile and
+/// desktop, and Flutter web. Mirrors the TS SDK's `UploadRelayClient` class.
 library;
 
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
+
+import '../errors/walrus_errors.dart';
 import '../models/protocol_types.dart';
+import '../network/request_executor.dart';
 
 /// Client for interacting with a Walrus Upload Relay.
 ///
@@ -29,29 +33,54 @@ import '../models/protocol_types.dart';
 ///   txDigest: registerDigest,
 ///   blobObjectId: blobObjectId,
 ///   deletable: true,
-///   requiresTip: true,
+///   requiresTip: tipConfig != null,
 /// );
 /// // result.certificate → use in certifyBlobTransaction
 /// ```
+///
+/// Pass your own [http.Client] to observe upload progress (for example an
+/// `XMLHttpRequest`-based client on the web). A client you pass is never
+/// closed by [close].
 class UploadRelayClient {
-  /// Base URL of the upload relay.
+  /// Base URL of the upload relay, without a trailing slash.
   final String host;
 
-  /// HTTP request timeout.
+  /// How long to wait for response headers, and then for each chunk of the
+  /// response body. The upload itself is not limited.
   final Duration timeout;
 
-  /// Optional error callback.
+  /// Optional error callback, called before an error is thrown.
   final void Function(Object error)? onError;
+
+  final http.Client? _providedHttpClient;
+  final http.Client _httpClient;
+  final RequestExecutor _executor;
 
   /// Cached tip configuration, loaded lazily.
   UploadRelayTipConfig? _cachedTipConfig;
   bool _tipConfigLoaded = false;
 
   UploadRelayClient({
-    required this.host,
-    this.timeout = const Duration(seconds: 120),
+    required String host,
+    Duration timeout = const Duration(seconds: 120),
+    void Function(Object error)? onError,
+    http.Client? httpClient,
+  }) : this._(host, httpClient, httpClient ?? http.Client(), timeout, onError);
+
+  UploadRelayClient._(
+    String host,
+    this._providedHttpClient,
+    this._httpClient,
+    this.timeout,
     this.onError,
-  });
+  ) : host = host.endsWith('/') ? host.substring(0, host.length - 1) : host,
+      _executor = RequestExecutor(_httpClient, timeout);
+
+  /// Closes the HTTP client this relay client created. A client passed to
+  /// the constructor is left open.
+  void close() {
+    if (_providedHttpClient == null) _httpClient.close();
+  }
 
   // -------------------------------------------------------------------------
   // Tip Config
@@ -67,13 +96,9 @@ class UploadRelayClient {
   Future<UploadRelayTipConfig?> tipConfig() async {
     if (_tipConfigLoaded) return _cachedTipConfig;
 
-    final uri = Uri.parse('$host/v1/tip-config');
-    final response = await _request('GET', uri);
-
-    final body = jsonDecode(response);
-    _cachedTipConfig = UploadRelayTipConfig.fromRelayResponse(body);
+    final body = await _request('GET', Uri.parse('$host/v1/tip-config'));
+    _cachedTipConfig = UploadRelayTipConfig.fromRelayResponse(jsonDecode(body));
     _tipConfigLoaded = true;
-
     return _cachedTipConfig;
   }
 
@@ -107,45 +132,24 @@ class UploadRelayClient {
     bool requiresTip = false,
     String? encodingType,
   }) async {
-    final query = <String, String>{'blob_id': blobId};
+    final uri = Uri.parse('$host/v1/blob-upload-relay').replace(
+      queryParameters: {
+        'blob_id': blobId,
+        if (requiresTip) 'nonce': _urlSafeBase64Encode(nonce),
+        if (requiresTip) 'tx_id': txDigest,
+        if (deletable) 'deletable_blob_object': blobObjectId,
+        'encoding_type': ?encodingType,
+      },
+    );
 
-    if (requiresTip) {
-      query['nonce'] = _urlSafeBase64Encode(nonce);
-      query['tx_id'] = txDigest;
-    }
+    final body = await _request('POST', uri, body: blob);
 
-    if (deletable) {
-      query['deletable_blob_object'] = blobObjectId;
-    }
-
-    if (encodingType != null) {
-      query['encoding_type'] = encodingType;
-    }
-
-    final queryString = query.entries
-        .map(
-          (e) =>
-              '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}',
-        )
-        .join('&');
-
-    final uri = Uri.parse('$host/v1/blob-upload-relay?$queryString');
-    final responseBody = await _request('POST', uri, body: blob);
-
-    final data = jsonDecode(responseBody) as Map<String, dynamic>;
-
-    // Parse response matching TS SDK structure:
-    // {
-    //   "blob_id": [byte, byte, ...],
-    //   "confirmation_certificate": {
-    //     "signers": [...],
-    //     "serialized_message": [...],
-    //     "signature": "<base64>"
-    //   }
-    // }
-    final certJson = data['confirmation_certificate'] as Map<String, dynamic>;
-    final certificate = ProtocolMessageCertificate.fromJson(certJson);
-
+    // {"blob_id": [..], "confirmation_certificate": {"signers": [..],
+    //  "serialized_message": [..], "signature": "<url-safe base64>"}}
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    final certificate = ProtocolMessageCertificate.fromJson(
+      data['confirmation_certificate'] as Map<String, dynamic>,
+    );
     return UploadRelayWriteResult(blobId: blobId, certificate: certificate);
   }
 
@@ -154,47 +158,33 @@ class UploadRelayClient {
   // -------------------------------------------------------------------------
 
   Future<String> _request(String method, Uri uri, {Uint8List? body}) async {
-    final client = HttpClient();
-    client.connectionTimeout = timeout;
-
     try {
-      final request = await client.openUrl(method, uri);
-      request.headers.set('Content-Type', 'application/octet-stream');
-
-      if (body != null) {
-        request.contentLength = body.length;
-        request.add(body);
-      }
-
-      final response = await request.close();
-      final responseBody = await response.transform(utf8.decoder).join();
-
+      final response = await _executor.send(
+        method: method,
+        uri: uri,
+        headers: body == null
+            ? null
+            : const {'Content-Type': 'application/octet-stream'},
+        body: body,
+      );
+      final text = await response.stream.bytesToString();
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        final error = Exception(
-          'Upload relay error ${response.statusCode}: $responseBody',
+        throw UploadRelayError(
+          statusCode: response.statusCode,
+          body: text,
+          uri: uri,
         );
-        onError?.call(error);
-        throw error;
       }
-
-      return responseBody;
-    } catch (e) {
-      onError?.call(e);
+      return text;
+    } catch (error) {
+      onError?.call(error);
       rethrow;
-    } finally {
-      client.close();
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Helpers
-  // -------------------------------------------------------------------------
-
   /// URL-safe base64 encoding (no padding, +/ replaced with -_).
-  static String _urlSafeBase64Encode(Uint8List data) {
-    final base64 = base64Encode(data);
-    return base64.replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-  }
+  static String _urlSafeBase64Encode(Uint8List data) =>
+      base64Url.encode(data).replaceAll('=', '');
 }
 
 /// Result of a successful upload relay write operation.

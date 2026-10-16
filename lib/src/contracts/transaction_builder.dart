@@ -302,9 +302,13 @@ class WalrusTransactionBuilder {
   /// Auth payload structure (matches TS SDK `addAuthPayload`):
   /// `blobDigest + SHA256(nonce) + BCS(u64, size)`
   ///
+  /// [size] is the unencoded blob size (it goes into the auth payload) and
+  /// [encodedSize] the encoded size the relay prices the tip by.
+  ///
   /// Corresponds to TS SDK's `sendUploadRelayTip()`.
   Transaction sendUploadRelayTip({
     required int size,
+    required int encodedSize,
     required Uint8List blobDigest,
     required Uint8List nonce,
     required UploadRelayTipConfig tipConfig,
@@ -312,8 +316,7 @@ class WalrusTransactionBuilder {
   }) {
     final tx = transaction ?? Transaction();
 
-    // Calculate tip amount.
-    final tipAmount = tipConfig.calculateTip(size);
+    final tipAmount = tipConfig.calculateTip(encodedSize);
 
     // Build auth payload: blobDigest + sha256(nonce) + bcs(u64(size))
     //

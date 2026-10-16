@@ -109,16 +109,27 @@ extension WalrusNetworkConfig on WalrusNetwork {
     }
   }
 
-  /// Default Upload Relay URL for this network (if available).
-  String? get defaultUploadRelayUrl {
-    switch (this) {
-      case WalrusNetwork.testnet:
-        return 'https://upload-relay.testnet.walrus.space';
-      case WalrusNetwork.mainnet:
-        // Mainnet relay URL TBD
-        return null;
-    }
-  }
+  /// Default Upload Relay URL for this network, run by Mysten Labs.
+  String get defaultUploadRelayUrl => switch (this) {
+    WalrusNetwork.testnet => 'https://upload-relay.testnet.walrus.space',
+    WalrusNetwork.mainnet => 'https://upload-relay.mainnet.walrus.space',
+  };
+
+  /// The WAL coin type on this network, used to pay for storage.
+  String get walCoinType => switch (this) {
+    WalrusNetwork.testnet =>
+      '0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a'
+          '::wal::WAL',
+    WalrusNetwork.mainnet =>
+      '0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59'
+          '::wal::WAL',
+  };
+
+  /// The Sui chain identifier wallets use for this network.
+  String get suiChain => switch (this) {
+    WalrusNetwork.testnet => 'sui:testnet',
+    WalrusNetwork.mainnet => 'sui:mainnet',
+  };
 }
 
 /// Lifecycle rank for blob statuses, used by [getVerifiedBlobStatus]

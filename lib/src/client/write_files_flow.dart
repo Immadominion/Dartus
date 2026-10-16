@@ -150,6 +150,7 @@ class WriteFilesFlow {
   Uint8List? _quiltBytes;
   QuiltIndex? _quiltIndex;
   BlobMetadata? _metadata;
+  int? _shardCount; // Shard count the quilt was encoded for.
   EncodedBlob? _encodedBlob;
   String? _blobObjectId;
   ProtocolMessageCertificate? _certificate;
@@ -206,6 +207,7 @@ class WriteFilesFlow {
     }
 
     // Encode quilt.
+    _shardCount = numShards;
     final quiltResult = encodeQuilt(blobs: blobs, numShards: numShards);
     _quiltBytes = quiltResult.quilt;
     _quiltIndex = quiltResult.index;
@@ -249,6 +251,7 @@ class WriteFilesFlow {
     if (_relayClient != null && _tipConfig != null) {
       _txBuilder.sendUploadRelayTip(
         size: quiltBytes.length,
+        encodedSize: encodedBlobLength(quiltBytes.length, _shardCount!),
         blobDigest: metadata.blobDigest,
         nonce: metadata.nonce,
         tipConfig: _tipConfig,

@@ -5,6 +5,7 @@
 /// node interaction.
 library;
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
@@ -74,36 +75,8 @@ class ProtocolMessageCertificate {
     throw ArgumentError('Unexpected signature format: ${value.runtimeType}');
   }
 
-  static Uint8List _urlSafeBase64Decode(String input) {
-    // Restore standard base64 padding and characters.
-    var normalized = input.replaceAll('-', '+').replaceAll('_', '/');
-    while (normalized.length % 4 != 0) {
-      normalized += '=';
-    }
-    // Use dart:convert through Uint8List
-    final bytes = <int>[];
-    const base64Chars =
-        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    final buffer = <int>[];
-    for (var i = 0; i < normalized.length; i++) {
-      final char = normalized[i];
-      if (char == '=') break;
-      buffer.add(base64Chars.indexOf(char));
-      if (buffer.length == 4) {
-        bytes.add((buffer[0] << 2) | (buffer[1] >> 4));
-        bytes.add(((buffer[1] & 0xF) << 4) | (buffer[2] >> 2));
-        bytes.add(((buffer[2] & 0x3) << 6) | buffer[3]);
-        buffer.clear();
-      }
-    }
-    if (buffer.length >= 2) {
-      bytes.add((buffer[0] << 2) | (buffer[1] >> 4));
-    }
-    if (buffer.length >= 3) {
-      bytes.add(((buffer[1] & 0xF) << 4) | (buffer[2] >> 2));
-    }
-    return Uint8List.fromList(bytes);
-  }
+  static Uint8List _urlSafeBase64Decode(String input) =>
+      base64Url.decode(base64Url.normalize(input));
 
   @override
   String toString() =>
@@ -125,8 +98,9 @@ class ProtocolMessageCertificate {
 sealed class TipStrategy {
   const TipStrategy();
 
-  /// Calculate the tip amount in MIST for the given blob size.
-  BigInt calculateTip(int blobSizeBytes);
+  /// The tip in MIST for a blob whose **encoded** size is [encodedSize]
+  /// bytes (see `encodedBlobLength`). Relays price by encoded size.
+  BigInt calculateTip(int encodedSize);
 
   factory TipStrategy.fromJson(Map<String, dynamic> json) {
     if (json.containsKey('const')) {
@@ -151,13 +125,13 @@ class ConstTipStrategy extends TipStrategy {
   const ConstTipStrategy({required this.amount});
 
   @override
-  BigInt calculateTip(int blobSizeBytes) => amount;
+  BigInt calculateTip(int encodedSize) => amount;
 
   @override
   String toString() => 'ConstTipStrategy(amount: $amount)';
 }
 
-/// Linear tip strategy: `base + perEncodedKib * ceil(blobSize / 1024)`.
+/// Linear tip strategy: `base + perEncodedKib * ceil(encodedSize / 1024)`.
 @immutable
 class LinearTipStrategy extends TipStrategy {
   final BigInt base;
@@ -166,8 +140,8 @@ class LinearTipStrategy extends TipStrategy {
   const LinearTipStrategy({required this.base, required this.perEncodedKib});
 
   @override
-  BigInt calculateTip(int blobSizeBytes) {
-    final kib = BigInt.from((blobSizeBytes + 1023) ~/ 1024);
+  BigInt calculateTip(int encodedSize) {
+    final kib = BigInt.from((encodedSize + 1023) ~/ 1024);
     return base + perEncodedKib * kib;
   }
 
@@ -220,10 +194,18 @@ class UploadRelayTipConfig {
     throw ArgumentError('Unknown tip config format: $json');
   }
 
-  /// Calculate the effective tip, capped at [max] if set.
-  BigInt calculateTip(int blobSizeBytes) {
-    final tip = kind.calculateTip(blobSizeBytes);
-    if (max != null && tip > max!) return max!;
+  /// The tip in MIST for a blob whose **encoded** size is [encodedSize].
+  ///
+  /// Throws [ArgumentError] when the tip exceeds [max]: paying less than the
+  /// relay asks for would only get the upload refused after the register
+  /// transaction has already spent WAL.
+  BigInt calculateTip(int encodedSize) {
+    final tip = kind.calculateTip(encodedSize);
+    if (max != null && tip > max!) {
+      throw ArgumentError(
+        'Upload relay tip $tip MIST exceeds the maximum of $max MIST',
+      );
+    }
     return tip;
   }
 
