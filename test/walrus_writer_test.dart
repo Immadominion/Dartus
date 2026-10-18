@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:dartus/dartus.dart';
 import 'package:sui/sui.dart';
 import 'package:test/test.dart';
@@ -625,6 +626,507 @@ void main() {
     );
   });
 
+  group('durable checkpoints', () {
+    final phases = <String, bool Function(Map<String, dynamic>)>{
+      'initial': (s) => s['metadata'] == null,
+      'encoded': (s) => s['metadata'] != null && s['owner'] == null,
+      'before registration': (s) =>
+          s['request'] != null && s['registerDigest'] == null,
+      'registration receipt': (s) =>
+          s['registerDigest'] != null && s['blobObjectId'] == null,
+      'registered': (s) =>
+          s['blobObjectId'] != null && s['certificate'] == null,
+      'uploaded certificate': (s) =>
+          s['certificate'] != null &&
+          s['request'] == null &&
+          s['certifyDigest'] == null,
+      'before certification': (s) =>
+          (s['request'] as Map?)?['registration'] == false,
+      'certification receipt': (s) => s['certifyDigest'] != null,
+    };
+    for (final phase in phases.entries) {
+      test('restores after ${phase.key} without another payment', () async {
+        WalrusWriteCheckpoint? saved;
+        final wallet = _RecoverableSigner(signer);
+        final flow = writer.writeFlow(
+          data,
+          epochs: 1,
+          onCheckpoint: (checkpoint) async {
+            if (saved == null &&
+                phase.value(checkpoint.toJson(includeData: false))) {
+              saved = checkpoint;
+              throw StateError('Storage interrupted after this durable save');
+            }
+          },
+        );
+        await expectLater(flow.run(wallet), throwsStateError);
+        expect(saved, isNotNull);
+        final stored = saved!.toJson(includeData: false);
+        expect(stored.containsKey('data'), isFalse);
+        final restored = await writer.restoreFlow(
+          WalrusWriteCheckpoint.fromJson(stored, data: data),
+        );
+        final result = await restored.run(wallet);
+        expect(result.blobObjectId, _blobObject);
+        expect(
+          signer.signed.where((t) => t.description.startsWith('Register')),
+          hasLength(1),
+        );
+        expect(
+          signer.signed.where((t) => t.description.startsWith('Certify')),
+          hasLength(1),
+        );
+      });
+    }
+
+    test(
+      'external signing persists an intent before returning each transaction',
+      () async {
+        WalrusWriteCheckpoint? saved;
+        final flow = writer.writeFlow(
+          data,
+          epochs: 1,
+          onCheckpoint: (c) async {
+            saved = c;
+          },
+        );
+        final registration = await flow.registerTransaction(_owner);
+        expect(saved!.pendingRequestId, isNotNull);
+        await expectLater(
+          flow.registerTransaction(_owner),
+          throwsA(isA<WalrusTransactionOutcomeUnknown>()),
+        );
+        await flow.registered(await signer.signAndExecute(registration));
+        expect(saved!.registerDigest, 'register-digest');
+        await flow.upload();
+        final certification = await flow.certifyTransaction();
+        expect(saved!.pendingRequestId, isNotNull);
+        await flow.certified(await signer.signAndExecute(certification));
+        expect(saved!.certifyDigest, 'certify-digest');
+        expect(saved!.pendingRequestId, isNull);
+        await expectLater(flow.certifyTransaction(), throwsStateError);
+      },
+    );
+
+    test(
+      'a failed unrelated digest cannot discard a pending registration',
+      () async {
+        final flow = writer.writeFlow(data, epochs: 1);
+        signer.errorNext = TimeoutException('lost registration');
+        await expectLater(
+          flow.run(signer),
+          throwsA(isA<WalrusTransactionOutcomeUnknown>()),
+        );
+        final id = flow.checkpoint.pendingRequestId;
+        chain.failRegistration = true;
+        await expectLater(
+          flow.registered('unrelated-failed-digest'),
+          throwsA(isA<WalrusTransactionExecutionFailed>()),
+        );
+        expect(flow.checkpoint.pendingRequestId, id);
+        expect(flow.registerDigest, isNull);
+        await flow.registered('register-digest');
+        await flow.run(signer);
+        expect(signer.signed, hasLength(2));
+      },
+    );
+
+    test(
+      'a failed unrelated digest cannot discard pending certification',
+      () async {
+        final flow = writer.writeFlow(data, epochs: 1);
+        signer.errorAfter = 1;
+        signer.errorNext = TimeoutException('lost certification');
+        await expectLater(
+          flow.run(signer),
+          throwsA(isA<WalrusTransactionOutcomeUnknown>()),
+        );
+        final id = flow.checkpoint.pendingRequestId;
+        chain.failCertification = true;
+        await expectLater(
+          flow.certified('unrelated-failed-digest'),
+          throwsA(isA<WalrusTransactionExecutionFailed>()),
+        );
+        expect(flow.checkpoint.pendingRequestId, id);
+        expect(flow.certifyDigest, isNull);
+        await flow.certified('certify-digest');
+        expect(signer.signed, hasLength(2));
+      },
+    );
+
+    test(
+      'a resume precheck cannot classify the earlier request as unsubmitted',
+      () async {
+        final ids = <String>[];
+        var calls = 0;
+        final wallet = RecoverableWalletTransactionSigner(
+          address: _owner,
+          execute: (tx, {required requestId, required resume}) async {
+            ids.add(requestId);
+            calls++;
+            if (calls == 1) throw TimeoutException('original response lost');
+            if (calls == 2) throw StateError('wallet is disconnected now');
+            return tx.description.startsWith('Register')
+                ? 'register-digest'
+                : 'certify-digest';
+          },
+          isDefinitelyNotCommitted: (error) => error is StateError,
+        );
+        final flow = writer.writeFlow(data, epochs: 1);
+        await expectLater(
+          flow.run(wallet),
+          throwsA(isA<WalrusTransactionOutcomeUnknown>()),
+        );
+        await expectLater(
+          flow.run(wallet),
+          throwsA(isA<WalrusTransactionOutcomeUnknown>()),
+        );
+        expect(flow.checkpoint.pendingRequestId, ids.first);
+        await flow.run(wallet);
+        expect(ids.take(3).toSet(), hasLength(1));
+      },
+    );
+
+    test(
+      'lost wallet response resumes the exact request ID and JSON',
+      () async {
+        final wallet = _RecoverableSigner(signer)..loseNextResponse = true;
+        final flow = writer.writeFlow(data, epochs: 1);
+        await expectLater(
+          flow.run(wallet),
+          throwsA(isA<WalrusTransactionOutcomeUnknown>()),
+        );
+        final first = wallet.requests.single;
+        final checkpoint = WalrusWriteCheckpoint.fromJson(
+          flow.checkpoint.toJson(),
+        );
+        final restored = await writer.restoreFlow(checkpoint);
+        await restored.run(wallet);
+        expect(wallet.requests[1], first);
+        expect(
+          signer.signed.where((t) => t.description.startsWith('Register')),
+          hasLength(1),
+        );
+        expect(wallet.resumeFlags, [false, true, false]);
+      },
+    );
+
+    test(
+      'unknown certification restores after its recipient transfer',
+      () async {
+        final wallet = _RecoverableSigner(signer)..loseResponseAfter = 1;
+        final flow = writer.writeFlow(data, epochs: 1, recipient: _host);
+        await expectLater(
+          flow.run(wallet),
+          throwsA(isA<WalrusTransactionOutcomeUnknown>()),
+        );
+        chain.didCertify = true;
+        final restored = await writer.restoreFlow(
+          WalrusWriteCheckpoint.fromJson(flow.checkpoint.toJson()),
+        );
+        final result = await restored.run(wallet);
+        expect(result.blob.owner, _host);
+        expect(signer.signed, hasLength(2));
+        expect(wallet.requests[2], wallet.requests[1]);
+      },
+    );
+
+    test(
+      'verified failed registration can resume with a fresh request',
+      () async {
+        WalrusWriteCheckpoint? receipt;
+        final flow = writer.writeFlow(
+          data,
+          epochs: 1,
+          onCheckpoint: (c) async {
+            if (c.registerDigest != null) {
+              receipt = c;
+              throw StateError('reload');
+            }
+          },
+        );
+        await expectLater(flow.run(signer), throwsStateError);
+        chain.failRegistration = true;
+        final restored = await writer.restoreFlow(receipt!);
+        expect(restored.registerDigest, isNull);
+        await restored.run(signer);
+        expect(signer.signed, hasLength(3));
+      },
+    );
+
+    test('verified failed certification retries certification only', () async {
+      WalrusWriteCheckpoint? receipt;
+      final flow = writer.writeFlow(
+        data,
+        epochs: 1,
+        onCheckpoint: (c) async {
+          if (c.certifyDigest != null) {
+            receipt = c;
+            throw StateError('reload');
+          }
+        },
+      );
+      await expectLater(flow.run(signer), throwsStateError);
+      chain.failCertification = true;
+      final restored = await writer.restoreFlow(receipt!);
+      expect(restored.certifyDigest, isNull);
+      await restored.run(signer);
+      expect(
+        signer.signed.where((t) => t.description.startsWith('Register')),
+        hasLength(1),
+      );
+      expect(signer.signed, hasLength(3));
+    });
+
+    test(
+      'encoding verification keeps the paid nonce, not a newly generated nonce',
+      () async {
+        final encoder = _ChangingNonceEncoder();
+        final nonceWriter = WalrusWriter(
+          network: WalrusNetwork.testnet,
+          chain: chain,
+          relay: relay,
+          encoder: encoder,
+        );
+        final flow = nonceWriter.writeFlow(data, epochs: 1);
+        relay.failNext = true;
+        await expectLater(flow.run(signer), throwsA(isA<UploadRelayError>()));
+        final before =
+            (flow.checkpoint.toJson(includeData: false)['metadata']
+                as Map)['nonce'];
+        final restored = await nonceWriter.restoreFlow(flow.checkpoint);
+        expect(encoder.calls, 2);
+        expect(
+          (restored.checkpoint.toJson(includeData: false)['metadata']
+              as Map)['nonce'],
+          before,
+        );
+        await restored.run(signer);
+        expect(signer.signed, hasLength(2));
+      },
+    );
+
+    test('restored legacy unknown request cannot submit again', () async {
+      signer.errorNext = TimeoutException('response lost');
+      final flow = writer.writeFlow(data, epochs: 1);
+      await expectLater(
+        flow.run(signer),
+        throwsA(isA<WalrusTransactionOutcomeUnknown>()),
+      );
+      final restored = await writer.restoreFlow(
+        WalrusWriteCheckpoint.fromJson(flow.checkpoint.toJson()),
+      );
+      await expectLater(
+        restored.run(signer),
+        throwsA(isA<WalrusTransactionOutcomeUnknown>()),
+      );
+      expect(signer.signed, hasLength(1));
+      await restored.registered('register-digest');
+      await restored.run(signer);
+      expect(signer.signed, hasLength(2));
+    });
+
+    test('storage failure before the wallet means no payment', () async {
+      final flow = writer.writeFlow(
+        data,
+        epochs: 1,
+        onCheckpoint: (_) async => throw StateError('quota exceeded'),
+      );
+      await expectLater(flow.run(signer), throwsStateError);
+      expect(signer.signed, isEmpty);
+      expect(relay.writes, isEmpty);
+    });
+
+    test('receipt save failure keeps the receipt in memory', () async {
+      var fail = true;
+      final flow = writer.writeFlow(
+        data,
+        epochs: 1,
+        onCheckpoint: (c) async {
+          if (c.registerDigest != null && fail) {
+            fail = false;
+            throw StateError('disk unavailable');
+          }
+        },
+      );
+      await expectLater(flow.run(signer), throwsStateError);
+      expect(flow.registerDigest, 'register-digest');
+      await flow.run(signer);
+      expect(signer.signed, hasLength(2));
+    });
+
+    test(
+      'save callbacks are awaited and concurrent runs are refused',
+      () async {
+        final gate = Completer<void>();
+        final entered = Completer<void>();
+        var first = true;
+        final flow = writer.writeFlow(
+          data,
+          epochs: 1,
+          onCheckpoint: (_) async {
+            if (first) {
+              first = false;
+              entered.complete();
+              await gate.future;
+            }
+          },
+        );
+        final run = flow.run(signer);
+        await entered.future;
+        expect(signer.signed, isEmpty);
+        await expectLater(flow.run(signer), throwsStateError);
+        gate.complete();
+        await run;
+      },
+    );
+
+    test('rejects changed bytes, checkpoint state and network', () async {
+      final flow = writer.writeFlow(data, epochs: 1);
+      final stored = flow.checkpoint.toJson(includeData: false);
+      expect(
+        () => WalrusWriteCheckpoint.fromJson(
+          stored,
+          data: Uint8List(data.length),
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => WalrusWriteCheckpoint.fromJson({
+          ...stored,
+          'epochs': 2,
+        }, data: data),
+        throwsFormatException,
+      );
+      expect(
+        () => WalrusWriteCheckpoint.fromJson({
+          ...stored,
+          'version': 2,
+        }, data: data),
+        throwsFormatException,
+      );
+      final other = WalrusWriter(
+        network: WalrusNetwork.mainnet,
+        chain: chain,
+        relay: relay,
+        encoder: _FakeEncoder(),
+      );
+      await expectLater(
+        other.restoreFlow(flow.checkpoint),
+        throwsFormatException,
+      );
+      expect(signer.signed, isEmpty);
+    });
+
+    test(
+      'rechecks the saved encoding rather than trusting a hash alone',
+      () async {
+        final flow = writer.writeFlow(data, epochs: 1);
+        await flow.encode();
+        final other = WalrusWriter(
+          network: WalrusNetwork.testnet,
+          chain: chain,
+          relay: relay,
+          encoder: _DifferentEncoder(),
+        );
+        await expectLater(
+          other.restoreFlow(flow.checkpoint),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
+      'restores an initial quilt without requiring a layout first',
+      () async {
+        final files = [
+          QuiltBlob(
+            identifier: 'a',
+            contents: data,
+            tags: {'type': 'text/plain'},
+          ),
+        ];
+        final flow = writer.writeFilesFlow(files, epochs: 1);
+        final stored = flow.checkpoint.toJson(includeData: false);
+        expect(stored.containsKey('fileData'), isFalse);
+        final restored = await writer.restoreFilesFlow(
+          WalrusWriteCheckpoint.fromJson(stored, files: files),
+        );
+        await restored.run(signer);
+        expect(signer.signed, hasLength(2));
+      },
+    );
+
+    test(
+      'quilt restores paid layout, file tags and original relay nonce',
+      () async {
+        final files = [
+          QuiltBlob(
+            identifier: 'b',
+            contents: data,
+            tags: {'type': 'text/plain'},
+          ),
+          QuiltBlob(identifier: 'a', contents: Uint8List.fromList([3, 2, 1])),
+        ];
+        final flow = writer.writeFilesFlow(files, epochs: 1);
+        relay.failNext = true;
+        await expectLater(flow.run(signer), throwsA(isA<UploadRelayError>()));
+        final originalNonce =
+            (flow.checkpoint.toJson(includeData: false)['metadata']
+                as Map)['nonce'];
+        final restored = await writer.restoreFilesFlow(
+          WalrusWriteCheckpoint.fromJson(
+            flow.checkpoint.toJson(includeData: false),
+            files: files,
+          ),
+        );
+        final result = await restored.run(signer);
+        expect(result.files.map((f) => f.identifier), ['a', 'b']);
+        expect(result.file('b').tags, {'type': 'text/plain'});
+        expect(
+          (restored.checkpoint.toJson(includeData: false)['metadata']
+              as Map)['nonce'],
+          originalNonce,
+        );
+        expect(
+          signer.signed.where((t) => t.description.startsWith('Register')),
+          hasLength(1),
+        );
+        expect(
+          relay.writes.single['blob'],
+          encodeQuilt(blobs: files, numShards: 1000).quilt,
+        );
+      },
+    );
+
+    test('quilt checkpoint rejects changed tags and file order', () {
+      final files = [
+        QuiltBlob(
+          identifier: 'a',
+          contents: data,
+          tags: {'type': 'text/plain'},
+        ),
+      ];
+      final stored = writer
+          .writeFilesFlow(files, epochs: 1)
+          .checkpoint
+          .toJson(includeData: false);
+      expect(
+        () => WalrusWriteCheckpoint.fromJson(
+          stored,
+          files: [
+            QuiltBlob(
+              identifier: 'a',
+              contents: data,
+              tags: {'type': 'text/html'},
+            ),
+          ],
+        ),
+        throwsFormatException,
+      );
+    });
+  });
+
   group('chain receipt validation', () {
     for (final field in [
       'id',
@@ -739,7 +1241,7 @@ class _FakeEncoder extends BlobEncoder {
         unencodedLength: data.length,
         encodingType: 1,
         nonce: Uint8List(32),
-        blobDigest: Uint8List(32),
+        blobDigest: Uint8List.fromList(sha256.convert(data).bytes),
       );
 }
 
@@ -940,5 +1442,75 @@ class _FakeChain implements WalrusChainReader {
       owner: didCertify ? finalOwner : owner,
     );
     return transformBlob?.call(blob) ?? blob;
+  }
+}
+
+class _RecoverableSigner implements RecoverableWalrusTransactionSigner {
+  _RecoverableSigner(this.delegate);
+  final _FakeSigner delegate;
+  final receipts = <String, String>{};
+  final requests = <String>[];
+  final intents = <String, String>{};
+  final resumeFlags = <bool>[];
+  bool loseNextResponse = false;
+  int? loseResponseAfter;
+  @override
+  String get address => delegate.address;
+  @override
+  Future<String> signAndExecute(WalletTransaction transaction) =>
+      throw StateError('Must use durable path');
+  @override
+  Future<String> signAndExecuteRecoverable(
+    WalletTransaction transaction, {
+    required String requestId,
+    required bool resume,
+  }) async {
+    requests.add(requestId);
+    resumeFlags.add(resume);
+    if (intents.containsKey(requestId)) {
+      expect(transaction.json, intents[requestId]);
+    }
+    intents[requestId] = transaction.json;
+    final digest = receipts[requestId] ??= await delegate.signAndExecute(
+      transaction,
+    );
+    if (loseNextResponse || loseResponseAfter == requests.length - 1) {
+      loseNextResponse = false;
+      loseResponseAfter = null;
+      throw TimeoutException('response lost');
+    }
+    return digest;
+  }
+}
+
+class _DifferentEncoder extends _FakeEncoder {
+  @override
+  Future<BlobMetadata> computeMetadata(Uint8List data, int numShards) async {
+    final original = await super.computeMetadata(data, numShards);
+    return BlobMetadata(
+      blobId: 'different-blob',
+      rootHash: original.rootHash,
+      unencodedLength: data.length,
+      encodingType: 1,
+      nonce: original.nonce,
+      blobDigest: original.blobDigest,
+    );
+  }
+}
+
+class _ChangingNonceEncoder extends _FakeEncoder {
+  int calls = 0;
+  @override
+  Future<BlobMetadata> computeMetadata(Uint8List data, int numShards) async {
+    final original = await super.computeMetadata(data, numShards);
+    calls++;
+    return BlobMetadata(
+      blobId: original.blobId,
+      rootHash: original.rootHash,
+      unencodedLength: data.length,
+      encodingType: 1,
+      nonce: Uint8List.fromList(List.filled(32, calls)),
+      blobDigest: original.blobDigest,
+    );
   }
 }
