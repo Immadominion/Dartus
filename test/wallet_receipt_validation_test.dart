@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dartus/dartus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sui/grpc/proto/sui/rpc/v2/effects.pb.dart' as pb;
@@ -7,8 +9,19 @@ import 'package:sui/sui.dart';
 
 void main() {
   final account = SuiAccount.ed25519Account();
+  final prepared = Transaction()
+    ..setSender(account.getAddress())
+    ..setGasPrice(BigInt.one)
+    ..setGasBudget(BigInt.from(1000000))
+    ..setGasPayment([])
+    ..setValidDuringExpiration(
+      minEpoch: 1,
+      maxEpoch: 2,
+      chain: '11111111111111111111111111111111',
+      nonce: 0,
+    );
   final transaction = WalletTransaction(
-    json: Transaction().toJson(),
+    json: prepared.toJson(),
     sender: account.getAddress(),
     chain: 'sui:testnet',
     description: 'Register the blob',
@@ -116,17 +129,17 @@ void main() {
   });
 }
 
-/// No network or real signing: only exercises interpretation of receipts.
-class _ReceiptClient implements SuiGrpcClient {
-  _ReceiptClient(this.receipt);
+/// A throwaway key signs locally; the execution receipt is entirely offline.
+class _ReceiptClient extends SuiGrpcClient {
+  _ReceiptClient(this.receipt)
+    : super(network: SuiNetwork.testnet, endpoint: 'http://127.0.0.1:1');
 
   final pb.ExecutedTransaction receipt;
 
   @override
-  Future<pb.ExecutedTransaction> signAndExecuteTransaction(
-    SuiAccount signer,
-    Transaction tx, {
-    BigInt? gasBudget,
+  Future<pb.ExecutedTransaction> executeTransaction(
+    Uint8List bytes,
+    List<Uint8List> signatures, {
     List<String>? readMask,
   }) async => receipt;
 
@@ -137,7 +150,4 @@ class _ReceiptClient implements SuiGrpcClient {
     Duration pollInterval = const Duration(milliseconds: 500),
     List<String>? readMask,
   }) async => receipt;
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

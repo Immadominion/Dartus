@@ -119,14 +119,14 @@ void main() {
       expect(e1.blobId, isNot(e2.blobId));
     });
 
-    test('sliver indices are 0-based and sequential', () {
+    test('pair indices map to ascending primary and descending secondary', () {
       final data = Uint8List(512);
       const numShards = 10;
       final encoded = encoder.encodeBlob(data, numShards);
 
       for (var i = 0; i < numShards; i++) {
         expect(encoded.primarySlivers[i].index, i);
-        expect(encoded.secondarySlivers[i].index, i);
+        expect(encoded.secondarySlivers[i].index, numShards - i - 1);
       }
     });
 

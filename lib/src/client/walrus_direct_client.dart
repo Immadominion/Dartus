@@ -2046,13 +2046,14 @@ class WalrusDirectClient {
     final exchangePkgId = await getWalExchangePackageId();
 
     final tx = Transaction();
-    txBuilder.exchangeForWalTransaction(
+    final coin = txBuilder.exchangeForWalTransaction(
       exchangeObjectId: exchangeId,
       suiCoinObjectId: suiCoinObjectId,
       amountSui: amountSui,
       walExchangePackageId: exchangePkgId,
       transaction: tx,
     );
+    tx.transferObjects([coin], signer.getAddress());
     tx.setSender(signer.getAddress());
 
     final result = await _executeTransaction(
@@ -2083,13 +2084,14 @@ class WalrusDirectClient {
     final exchangePkgId = await getWalExchangePackageId();
 
     final tx = Transaction();
-    txBuilder.exchangeForSuiTransaction(
+    final coin = txBuilder.exchangeForSuiTransaction(
       exchangeObjectId: exchangeId,
       walCoinObjectId: walCoinObjectId,
       amountWal: amountWal,
       walExchangePackageId: exchangePkgId,
       transaction: tx,
     );
+    tx.transferObjects([coin], signer.getAddress());
     tx.setSender(signer.getAddress());
 
     final result = await _executeTransaction(
@@ -2119,12 +2121,13 @@ class WalrusDirectClient {
     final exchangePkgId = await getWalExchangePackageId();
 
     final tx = Transaction();
-    txBuilder.exchangeAllForWalTransaction(
+    final coin = txBuilder.exchangeAllForWalTransaction(
       exchangeObjectId: exchangeId,
       suiCoinObjectId: suiCoinObjectId,
       walExchangePackageId: exchangePkgId,
       transaction: tx,
     );
+    tx.transferObjects([coin], signer.getAddress());
     tx.setSender(signer.getAddress());
 
     final result = await _executeTransaction(
@@ -2154,12 +2157,13 @@ class WalrusDirectClient {
     final exchangePkgId = await getWalExchangePackageId();
 
     final tx = Transaction();
-    txBuilder.exchangeAllForSuiTransaction(
+    final coin = txBuilder.exchangeAllForSuiTransaction(
       exchangeObjectId: exchangeId,
       walCoinObjectId: walCoinObjectId,
       walExchangePackageId: exchangePkgId,
       transaction: tx,
     );
+    tx.transferObjects([coin], signer.getAddress());
     tx.setSender(signer.getAddress());
 
     final result = await _executeTransaction(
@@ -2482,8 +2486,10 @@ class WalrusDirectClient {
             timeout: nodeTimeout,
           ).then<MapEntry<int, StorageConfirmation?>>(
             (confirmation) => MapEntry(nodeIndex, confirmation),
-            onError: (Object _) =>
-                MapEntry<int, StorageConfirmation?>(nodeIndex, null),
+            onError: (Object error) {
+              logger.debug('Storage node $nodeIndex failed: $error');
+              return MapEntry<int, StorageConfirmation?>(nodeIndex, null);
+            },
           ),
       ]);
       for (final result in results) {

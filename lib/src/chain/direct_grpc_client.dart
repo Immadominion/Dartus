@@ -9,6 +9,7 @@ import 'package:sui/sui.dart';
 import 'package:sui/types/normalized.dart';
 
 import '../errors/walrus_errors.dart';
+import 'walrus_grpc_transaction.dart';
 
 /// gRPC transport for the native client's existing Sui response models.
 ///
@@ -22,7 +23,7 @@ class DirectGrpcClient extends SuiClient {
   final SuiGrpcClient grpc;
 
   GrpcBuilderAdapter get _builder =>
-      GrpcBuilderAdapter(grpc.core as GrpcCoreClient);
+      WalrusGrpcBuilderAdapter(grpc.core as GrpcCoreClient);
 
   @override
   Future<ResolvedGasData?> resolveGasData(TransactionBlockDataBuilder data) =>
@@ -177,33 +178,11 @@ class DirectGrpcClient extends SuiClient {
     SuiTransactionBlockResponseOptions? responseOptions,
     ExecuteTransaction requestType = ExecuteTransaction.WaitForEffectsCert,
   }) async {
-    if (options != null) {
-      if (options.onlyTransactionKind) {
-        throw ArgumentError(
-          'Cannot execute transaction-kind bytes without transaction data',
-        );
-      }
-      transaction.setSenderIfNotSet(signer.getAddress());
-      final bytes = await transaction.build(
-        BuildOptions(
-          client: options.client ?? this,
-          protocolConfig: options.protocolConfig,
-          limits: options.limits,
-        ),
-      );
-      final signed = signer.keyPair.signTransactionBlock(bytes);
-      return _transactionResponse(
-        await grpc.executeTransaction(
-          bytes,
-          [Uint8List.fromList(base64Decode(signed.signature))],
-          readMask: const ['digest', 'effects'],
-        ),
-      );
-    }
-    final executed = await grpc.signAndExecuteTransaction(
+    final executed = await signAndExecuteWalrusTransaction(
+      grpc,
       signer,
       transaction,
-      readMask: const ['digest', 'effects'],
+      options: options,
     );
     return _transactionResponse(executed);
   }

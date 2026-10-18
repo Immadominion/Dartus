@@ -51,6 +51,25 @@ void main() {
       expect(parsed.unencodedLength, data.length);
       expect(result.primarySlivers, hasLength(4));
       expect(result.secondarySlivers, hasLength(4));
+      // walrus-core pairs ascending primary indices with descending secondary
+      // indices. The storage node validates the serialized index against the
+      // pair in the request URL before accepting the sliver.
+      expect(result.primarySlivers.map((sliver) => sliver.index), [0, 1, 2, 3]);
+      expect(result.secondarySlivers.map((sliver) => sliver.index), [
+        3,
+        2,
+        1,
+        0,
+      ]);
+      for (var pair = 0; pair < 4; pair++) {
+        final secondary = result.secondarySlivers[pair];
+        final body = WalrusBlobEncoder.bcsSliverData(secondary);
+        final serializedIndex = ByteData.sublistView(
+          body,
+          body.length - 2,
+        ).getUint16(0, Endian.little);
+        expect(3 - serializedIndex, pair);
+      }
     },
   );
 }

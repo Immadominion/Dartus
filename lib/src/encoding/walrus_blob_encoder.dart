@@ -151,7 +151,8 @@ class WalrusBlobEncoder extends BlobEncoder {
         SliverData(
           data: result.secondarySlivers[i],
           symbolSize: symbolSize,
-          index: i,
+          // FFI buffers follow pair order; the secondary axis runs backwards.
+          index: numShards - i - 1,
         ),
       );
     }

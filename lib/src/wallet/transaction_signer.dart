@@ -5,6 +5,7 @@ import 'package:meta/meta.dart';
 import 'package:sui/sui.dart';
 
 import '../errors/walrus_errors.dart';
+import '../chain/walrus_grpc_transaction.dart';
 
 /// The wallet explicitly declined, or execution is known to have failed.
 ///
@@ -123,10 +124,10 @@ class KeypairTransactionSigner implements WalrusTransactionSigner {
 
   @override
   Future<String> signAndExecute(WalletTransaction transaction) async {
-    final executed = await sui.signAndExecuteTransaction(
+    final executed = await signAndExecuteWalrusTransaction(
+      sui,
       account,
       Transaction.from(transaction.json),
-      readMask: const ['digest', 'effects'],
     );
     // Protobuf defaults absent booleans to false. Missing evidence must not
     // be treated as a failed payment that is safe to submit again.

@@ -5,111 +5,65 @@ All notable changes to Dartus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] — unreleased
-
-Local release candidate: storage paid for by the person's own wallet, on Flutter
-web and natively.
+## [0.4.0] - 2026-10-18
 
 ### Added
 
-- `WalrusWriter`: register, upload through the upload relay, and certify a
-  blob with the signer paying WAL, gas and the relay tip. Two wallet
-  approvals per write; the Blob object goes to the signer or a `recipient`.
-  `WalrusWriteFlow.run` resumes recorded steps in a retained flow.
-  `estimate` prices a write;
-  `InsufficientWalBalanceError` is raised before the wallet is asked.
-- `WalrusWriter.writeFiles`: several files as one quilt (two approvals and
-  one storage fee per batch), with a quilt patch ID per file.
-  `WalrusClient.getQuiltPatch` reads one file by patch ID.
-- `WalletTransaction` (the JSON wallets take for
-  `sui:signAndExecuteTransaction`, with WAL and tip intents resolved),
-  `WalrusTransactionSigner`, `WalletTransactionSigner` and
-  `KeypairTransactionSigner`.
-- `WalrusWriter.estimateFiles` prices a batch as the quilt it will become.
-- `WalrusClient` can be read-only: `publisherBaseUrl` is optional, and
-  uploads without one throw `StateError`.
-- `WalrusChainReader`: Walrus system state, Blob objects, created objects
-  and balances over Sui gRPC-web.
-- `WalrusTransactionBuilder.addRegisterBlob`, paying with exact-amount WAL
-  `CoinWithBalance` intents, as the TS SDK's `registerBlob()`.
-- Blob metadata on Flutter web from Mysten's `walrus-wasm` 0.3.1 (bundled as
-  package assets, Apache-2.0) in a module Web Worker; `createDefaultBlobEncoder`
-  picks walrus-wasm on the web and `libwalrus_ffi` natively.
-- `WalrusNetwork.walCoinType`, `suiChain`, and a default mainnet relay URL.
-- `UploadRelayError` for relay refusals, with status and message.
+- `WalrusWriter` for wallet-funded uploads on Flutter web and native: register,
+  upload through a relay, and certify. Supports cost estimates, recipient
+  addresses, and a `maxRelayTip` limit.
+- `writeFiles` and `estimateFiles` for storing multiple files as one quilt;
+  `WalrusClient.getQuiltPatch` reads individual files by patch ID.
+- `WalletTransactionSigner` and `KeypairTransactionSigner` adapters. Retained
+  write flows resume completed steps and block resubmission when a transaction's
+  outcome is unknown.
+- Browser encoding through the bundled `walrus-wasm` Web Worker.
+  `createDefaultBlobEncoder` selects the web or native encoder.
+- `WalrusChainReader` for system state, Blob objects, transaction results and
+  balances over Sui gRPC-web.
+- `WalrusTransactionBuilder.addRegisterBlob` for WAL-funded registration in a
+  larger transaction, and a default mainnet upload relay.
 
-### Changed (breaking)
+### Breaking changes
 
-- Requires `sui` ^0.5.1 (gRPC-web and GraphQL clients; pointycastle 4).
-  Default `WalrusDirectClient` chain operations now use gRPC.
-- All upload entry points reject `deletable: false` before submission.
-- Native users must rebuild `libwalrus_ffi`: encoding now requires
-  `walrus_encode_blob_v2` for complete canonical metadata.
-- The deprecated transaction builder `registerBlobTransaction` now throws
-  instead of constructing an invalid placeholder transaction. Use
-  `registerBlobWithWal` or `addRegisterBlob`.
-- Wallet timeouts and lost responses block retry until the original outcome
-  is resolved. A custom signer must identify definite declines with
-  `WalrusTransactionNotCommitted` or `isDefinitelyNotCommitted`.
-- `TipStrategy.calculateTip` and `UploadRelayTipConfig.calculateTip` take the
-  **encoded** size; `sendUploadRelayTip` takes `encodedSize`. A tip above
-  `max` now throws instead of being capped.
-- `WalrusNetwork.defaultUploadRelayUrl` is non-null (mainnet has a relay).
-- `WalrusClient.publisherBaseUrl` is nullable.
+- Requires Dart 3.11 or later and `sui` ^0.5.1. The default native chain client
+  uses Sui gRPC.
+- Upload APIs reject `deletable: false` before submission. Existing
+  non-deletable blobs remain readable.
+- Native users must rebuild `libwalrus_ffi`; encoding requires the new
+  `walrus_encode_blob_v2` symbol.
+- The deprecated `WalrusTransactionBuilder.registerBlobTransaction` throws
+  `UnsupportedError`. Use `registerBlobWithWal` or `addRegisterBlob`.
+- `TipStrategy.calculateTip` and `UploadRelayTipConfig.calculateTip` now take
+  encoded size. `sendUploadRelayTip` takes `encodedSize`. Tips above `max`
+  throw instead of being capped.
+- `WalrusClient.publisherBaseUrl` is nullable, allowing read-only clients.
+  Uploads without a publisher throw `StateError`.
+- `WalrusNetwork.defaultUploadRelayUrl` is non-null.
+- `getBlobAsFileStreaming` bypasses the byte cache. Use `getBlobAsFile` for
+  cached downloads.
 
 ### Fixed
 
-- Native encoding returns the actual per-pair Merkle hashes from walrus-core;
-  a byte-for-byte WASM reference fixture replaces placeholder metadata.
-- Direct uploads use one authenticated confirmation per committee node,
-  validate shard-weight quorum, the exact signed message and aggregate signature,
-  and require BLS
-  before payment. Native wallet flows verify registration and certification
-  on chain. Default storage-node transport no longer bypasses TLS checks.
-- Wallet flows reject concurrent submissions, retain paid metadata on retry,
-  validate receipt ownership/content/storage period, and distinguish unknown
-  submission outcomes from definite rejection. Optional `maxRelayTip` caps
-  the tip at estimate and registration time.
-- Streaming replacement preserves checked permission bits and symlink targets
-  while staging changes before rename. Cleanup errors cannot mask the result.
-  No age-based deletion of unknown staging directories is performed.
-- Native build output is untracked and the build script selects only the
-  current host's library artifact.
-- Linear relay tips were computed from the unencoded size, underpaying the
-  mainnet relay, which then refused uploads after WAL had been spent.
-- `UploadRelayClient` used `dart:io` and could not run on Flutter web; it now
-  uses `package:http` and accepts an `http.Client` (for upload progress).
-- Quilt file identifiers are written and read as BCS strings. Aggregators
-  could not read Dartus quilts ("invalid identifier"); vectors from
-  `@mysten/walrus` now match byte for byte.
-
-- `WalrusClient.getBlobByObjectId` now uses the aggregator's
-  `/v1/blobs/by-object-id/{objectId}` route so Sui object IDs are resolved
-  correctly, including when the aggregator URL has a base path.
-- Cache overwrites preserve unrelated entries and refresh recency. Per-instance
-  operation ordering prevents concurrent writes from exceeding capacity or
-  racing cleanup; failed writes preserve the previous complete file.
-- HTTP response bodies now time out after an idle interval, canceling their
-  stream subscription. The existing separate header deadline is retained.
-- Streaming file downloads write chunks with backpressure into a temporary
-  sibling directory, replace the destination only after success, and clean up
-  after stream or filesystem failures. Error diagnostics are capped at 64 KiB.
-- All four automatic WAL coin selection/merge paths follow pagination, ignore
-  duplicate coin IDs, and reject missing or repeated continuation cursors.
-- README examples now use the current imports and named arguments. Security
-  documentation distinguishes source checks from audits and records current
-  current transport, upload-policy and live-verification limits.
-
-### Changed
-
-- `getBlobAsFileStreaming` bypasses both byte-cache reads and writes to avoid
-  buffering entire downloads. Use `getBlobAsFile` when cache reuse is wanted.
-- Declared Dart minimum is now 3.11, matching the existing hosted `bls_dart`
-  dependency. Shortened the package description to satisfy metadata guidance.
-- Default tests are deterministic and block external native HTTP requests;
-  live checks moved to explicitly selected `live_test/` files. Added local
-  regressions, checked documentation examples, Chrome JavaScript runtime tests,
-  and a GitHub Actions workflow for formatting, analysis, native and web tests.
+- Native encoding returns complete metadata, including per-pair Merkle hashes.
+- Direct uploads send the correct secondary sliver indices to storage nodes.
+- Native and keypair transactions support SUI address balances for gas.
+- Direct uploads validate storage confirmations and BLS signatures against
+  the committee. Default storage-node HTTPS connections validate certificates.
+- Wallet flows prevent concurrent submissions and validate registration and
+  certification results before continuing.
+- Relay uploads work on Flutter web and calculate tips from encoded size.
+- Quilt identifiers use the BCS string format expected by aggregators.
+- Object-ID downloads use the aggregator's `/v1/blobs/by-object-id/` route.
+- Cache overwrites and concurrent writes preserve complete entries and enforce
+  capacity. Streaming downloads stage writes before replacing the destination,
+  preserve checked permission bits and symlink targets, and handle cleanup
+  errors without masking the result.
+- HTTP response bodies time out when stalled; error diagnostics are bounded.
+- Automatic WAL coin selection follows pagination and handles duplicate coins
+  and invalid continuation cursors.
+- WAL/SUI exchange helpers transfer the returned coin to the signer.
+- Native builds select the current platform's library artifact.
 
 ## [0.3.0] - 2026-06-20
 

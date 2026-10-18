@@ -152,14 +152,32 @@ void main() {
       final servers = <HttpServer>[];
       final paths = <List<String>>[];
       final loopbackNodes = <StorageNodeInfo>[];
+      final blob = WalrusBlobEncoder().encodeBlob(
+        Uint8List.fromList([1, 2, 3, 4, 5]),
+        4,
+      );
       for (var i = 0; i < 2; i++) {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         servers.add(server);
         final requests = <String>[];
         paths.add(requests);
         server.listen((request) async {
-          await request.drain<void>();
+          final bytes = await request.fold<List<int>>([], (all, chunk) {
+            all.addAll(chunk);
+            return all;
+          });
           requests.add(request.uri.path);
+          if (request.uri.path.contains('/slivers/')) {
+            final segments = request.uri.pathSegments;
+            final pairIndex = int.parse(segments[4]);
+            final index = bytes[bytes.length - 2] | (bytes.last << 8);
+            final expectedPair = segments.last == 'primary' ? index : 3 - index;
+            // Mirror the storage node's axis-specific pair/index validation.
+            if (pairIndex != expectedPair) {
+              request.response.statusCode = HttpStatus.badRequest;
+              request.response.write('SLIVER_INDEX_MISMATCH');
+            }
+          }
           if (request.uri.path.contains('/confirmation/')) {
             request.response.headers.contentType = ContentType.json;
             request.response.write(
@@ -199,20 +217,6 @@ void main() {
           for (final node in loopbackNodes)
             for (final shard in node.shardIndices) shard: node,
         },
-      );
-      final slivers = List.generate(
-        4,
-        (i) =>
-            SliverData(data: Uint8List.fromList([i]), symbolSize: 1, index: i),
-      );
-      final blob = EncodedBlob(
-        blobId: blobId,
-        blobIdBytes: Uint8List(32),
-        metadataBytes: Uint8List.fromList([0, 1]),
-        rootHash: Uint8List(32),
-        unencodedLength: 1,
-        primarySlivers: slivers,
-        secondarySlivers: slivers,
       );
       final client = WalrusDirectClient(
         network: WalrusNetwork.testnet,

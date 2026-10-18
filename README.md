@@ -18,19 +18,19 @@ Dartus is a Dart/Flutter SDK for [Walrus](https://walrus.xyz) blob storage. It p
 | Relay/direct: `WalrusDirectClient` and write flows | `package:dartus/direct.dart` | Native only; Sui client, wallet for writes, and valid encoding metadata |
 | Built-in encoding: `WalrusBlobEncoder` | `package:dartus/direct.dart` | Native `libwalrus_ffi` required for encoding and decoding |
 
-The HTTP publisher operator pays on-chain storage costs and may require authentication or charge for its service. `WalrusWriter` and the direct and relay writes use the user's wallet for SUI gas and WAL storage costs. A relay accepts the raw blob, but registration still needs valid metadata; the built-in metadata encoder uses FFI too.
+The HTTP publisher operator pays on-chain storage costs and may require authentication or charge for its service. `WalrusWriter` and the direct and relay writes use the user's wallet for SUI gas and WAL storage costs. A relay accepts the raw blob, but registration still needs valid metadata. The built-in encoder uses WASM on Flutter web and FFI on native platforms.
 
-This checkout prepares 0.4.0. The native direct client now uses Sui gRPC, validates TLS certificates, and verifies storage confirmations with BLS. Its full live write path still needs acceptance testing; unit tests and read-only network checks do not establish mainnet readiness. See [SECURITY.md](SECURITY.md).
+The native direct client uses Sui gRPC, validates TLS certificates, and verifies storage confirmations with BLS. See [SECURITY.md](SECURITY.md) for runtime requirements and limitations.
 
 All upload APIs require deletable blobs. Passing `deletable: false` fails before submission; existing non-deletable blobs remain readable.
 
 ## Installation
 
-Use Flutter with bundled Dart **>=3.11.0 <4.0.0** for this checkout and its dependencies.
+Requires Flutter with Dart **>=3.11.0 <4.0.0**.
 
 ```yaml
 dependencies:
-  dartus: ^0.3.0
+  dartus: ^0.4.0
 ```
 
 If your app imports Sui types directly, also declare `sui: ^0.5.1` under dependencies. Then run:
@@ -38,16 +38,6 @@ If your app imports Sui types directly, also declare `sui: ^0.5.1` under depende
 ```bash
 flutter pub get
 ```
-
-The installation example above targets the previously published 0.3.0. The 0.4.0 changes in this checkout are not published yet. Use a local path dependency when testing these changes:
-
-```yaml
-dependencies:
-  dartus:
-    path: ../Dartus
-```
-
-The path must point from your app to this checkout. Chrome tests cover the HTTP byte API, memory cache and the WASM encoder running in a worker. They use the JavaScript Flutter build; native direct/FFI APIs remain unavailable in browsers.
 
 ## HTTP quick start
 
@@ -76,7 +66,7 @@ Future<Uint8List> uploadAndRead(WalrusClient client, Uint8List bytes) async {
 
 Create the client once, pass your bytes to `uploadAndRead`, and `await client.close()` when finished. Endpoint availability and browser CORS permissions depend on the publisher/aggregator. For an authenticated publisher, set `jwtToken` on the client or upload call; keep private service credentials out of browser bundles.
 
-The exact functions live in [tool/quickstart_http.dart](tool/quickstart_http.dart). Their upload/read behavior is tested with an injected HTTP client for both `newlyCreated` and `alreadyCertified` responses. These tests do not perform a public upload.
+See [tool/quickstart_http.dart](tool/quickstart_http.dart) for a complete example.
 
 ### Downloads, caching, and timeouts
 
@@ -98,10 +88,11 @@ Future<void> downloadToFile(
 
 ## Wallet writes (Flutter web and native)
 
-`WalrusWriter` stores a blob with every cost paid by the person's wallet: WAL for storage, SUI for gas and the upload relay's tip. There is no publisher and no server key. A write takes two approvals:
-1. register the blob and pay for it;
-2. the bytes go to Mysten's upload relay;
-3. certify it.
+`WalrusWriter` uses the signer's wallet to pay WAL for storage and SUI for gas and the relay tip. The write has three steps and two wallet approvals:
+
+1. Approve registration and payment.
+2. Upload the bytes to the relay.
+3. Approve certification.
 
 The `Blob` object belongs to the signer, or to a `recipient` you name.
 
@@ -120,7 +111,7 @@ final result = await writer.write(
 print('${result.blobId} is owned by ${result.blob.owner}');
 ```
 
-- **Wallets:** a wallet receives `tx.json`, the serialized form `@mysten/sui`'s dApp Kit hands to `sui:signAndExecuteTransaction`. WAL and the SUI tip are already resolved against the signer's coins and address balance, and the wallet adds gas. `sui_wallet_web` provides `signAndExecuteTransaction` for Flutter web. Scripts and tests can use `KeypairTransactionSigner`.
+- **Wallets:** a wallet receives `tx.json`, the serialized form `@mysten/sui`'s dApp Kit hands to `sui:signAndExecuteTransaction`. WAL and the SUI tip are already resolved against the signer's coins and address balance, and the wallet adds gas. Scripts and tests can use `KeypairTransactionSigner`.
 - **Several files:** `writeFiles` stores a batch as one Walrus quilt: one blob, so two approvals and one storage fee for the whole batch. Every blob pays for at least about 64 MB of encoded storage, so this is far cheaper for small files. Each file gets a patch ID; read it with `WalrusClient.getQuiltPatch(patchId)`. The relay accepts one blob per paid transaction, so a quilt is the way to batch.
 - **Retrying:** retain the `WalrusWriteFlow` from `writeFlow(...)` (or `writeFilesFlow`). `run(signer)` resumes a recorded registration after a failed upload. A definite wallet decline is retryable when the signer throws `WalrusTransactionNotCommitted` or its `isDefinitelyNotCommitted` callback identifies an explicit rejection. A timeout or lost response raises `WalrusTransactionOutcomeUnknown` and blocks resubmission. Check wallet history, then supply the original digest via `registered` / `certified`; call `confirmNotCommitted()` only when the original request cannot succeed. This state is in memory: a page reload loses it, so check prior transactions before starting a new flow. Too little WAL fails before approval.
 - **Relay budget:** set `WalrusWriter(maxRelayTip: BigInt.from(...))` in MIST to reject a relay tip above your limit before approval. Estimates are refreshed when building registration; gas and WAL are separate costs.
@@ -151,7 +142,7 @@ Direct storage-node writes also require an initialized `BlsProvider`. If using `
 
 ## Native API examples
 
-These functions are checked against the current API in [tool/quickstart_examples.dart](tool/quickstart_examples.dart). They have not been used to submit live transactions as part of the documentation checks.
+See [tool/quickstart_examples.dart](tool/quickstart_examples.dart) for native examples.
 
 ```dart
 import 'dart:convert';
@@ -228,11 +219,11 @@ Use `writeFiles` (direct mode) or `WalrusWriter.writeFiles` (wallet writes) to u
 
 The default `WalrusClient` transport uses platform TLS validation for HTTPS. Its `useSecureConnection` argument is retained for source compatibility and has no effect. If you inject `httpClient`, its transport policy applies. HTTP URLs are still allowed and are not encrypted.
 
-This differs from `WalrusDirectClient`: its shared storage-node client currently accepts invalid certificates. Setting an HTTP client's compatibility flag does not fix that direct-mode behavior.
+The default `WalrusDirectClient` storage-node transport also validates HTTPS certificates. Custom transports are responsible for their own TLS configuration.
 
-HTTP uploads default to `deletable: true`, but callers can pass `false`. Direct write APIs require an explicit value and also permit `false`. Defaults are not enforcement of a deletable-only policy. Review [SECURITY.md](SECURITY.md) before handling sensitive data or relying on deletion.
+All upload APIs require `deletable: true`; passing `false` is rejected before submission. Reading existing non-deletable blobs remains supported. See [SECURITY.md](SECURITY.md) for deletion semantics and other limitations.
 
-## Testing this checkout
+## Development
 
 Run from the Dartus repository root:
 
@@ -265,12 +256,12 @@ DARTUS_LIVE_ED25519_SEED=<32-byte hex seed> \
 flutter test --no-pub live_test/wallet_write_live_test.dart
 ```
 
-Live publisher upload checks require separate explicit opt-in and a writable endpoint. See [CONTRIBUTING.md](CONTRIBUTING.md) for those commands and the expected environment. No live upload is part of CI. Passing tests or analysis is not a security audit or proof of a working mainnet transaction.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for native and publisher live tests. Live writes require explicit opt-in and do not run in CI.
 
 ## Examples and API documentation
 
 - The Flutter HTTP example lives in [example/](example/).
-- [Dartus-Demo](https://github.com/Immadominion/Dartus-Demo) demonstrates the broader API; its direct paths have the same readiness limits described above.
+- [Dartus-Demo](https://github.com/Immadominion/Dartus-Demo) demonstrates the broader API.
 - [Published API reference](https://pub.dev/documentation/dartus/latest/) describes the hosted release. Run `dart doc` for this checkout's API docs.
 - [Contribution setup](CONTRIBUTING.md), [changelog](CHANGELOG.md), and [issue tracker](https://github.com/Immadominion/Dartus/issues).
 
