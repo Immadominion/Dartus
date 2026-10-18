@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Native encoding returns complete metadata, including per-pair Merkle hashes.
 - Direct uploads send the correct secondary sliver indices to storage nodes.
+- Native reads and sliver upload helpers use the storage-node BCS format.
 - Native and keypair transactions support SUI address balances for gas.
 - Direct uploads validate storage confirmations and BLS signatures against
   the committee. Default storage-node HTTPS connections validate certificates.

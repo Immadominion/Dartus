@@ -14,10 +14,9 @@ import 'package:test/test.dart';
 void main() {
   group('parseSliverResponse', () {
     test('parses a Primary sliver correctly', () {
-      // Build a BCS-encoded Primary Sliver manually:
-      // variant=0 (Primary), data=[1,2,3,4] (ULEB128 len=4), symbolSize=2, index=7
+      // GET /slivers/{pair}/primary returns inner SliverData without an enum.
+      // data=[1,2,3,4] (ULEB128 len=4), symbolSize=2, index=7
       final builder = BytesBuilder(copy: false);
-      builder.addByte(0); // variant: Primary
       builder.addByte(4); // ULEB128: data length = 4
       builder.add([1, 2, 3, 4]); // data bytes
       builder.addByte(2); // symbol_size low byte
@@ -34,10 +33,10 @@ void main() {
     });
 
     test('parses a Secondary sliver correctly', () {
+      final data = List.generate(32, (i) => i);
       final builder = BytesBuilder(copy: false);
-      builder.addByte(1); // variant: Secondary
-      builder.addByte(3); // ULEB128: data length = 3
-      builder.add([10, 20, 30]); // data bytes
+      builder.addByte(32); // Two symbols of 16 bytes.
+      builder.add(data);
       builder.addByte(16); // symbol_size = 16
       builder.addByte(0);
       builder.addByte(42); // index = 42
@@ -46,7 +45,7 @@ void main() {
       final bcs = Uint8List.fromList(builder.toBytes());
       final parsed = parseSliverResponse(bcs);
 
-      expect(parsed.data, equals([10, 20, 30]));
+      expect(parsed.data, equals(data));
       expect(parsed.symbolSize, 16);
       expect(parsed.index, 42);
     });
@@ -55,11 +54,10 @@ void main() {
       // Data length = 300 → ULEB128 = [0xAC, 0x02]
       final data = Uint8List.fromList(List.generate(300, (i) => i % 256));
       final builder = BytesBuilder(copy: false);
-      builder.addByte(0); // variant
       builder.addByte(0xAC); // ULEB128 low byte
       builder.addByte(0x02); // ULEB128 high byte (300 = 0x12C = 0b10_0101100)
       builder.add(data);
-      builder.addByte(8); // symbol_size = 8
+      builder.addByte(4); // symbol_size = 4
       builder.addByte(0);
       builder.addByte(0); // index = 0
       builder.addByte(0);
@@ -69,15 +67,14 @@ void main() {
 
       expect(parsed.data.length, 300);
       expect(parsed.data, equals(data));
-      expect(parsed.symbolSize, 8);
+      expect(parsed.symbolSize, 4);
       expect(parsed.index, 0);
     });
 
     test('handles large symbol_size and index (u16)', () {
       final builder = BytesBuilder(copy: false);
-      builder.addByte(0); // variant
-      builder.addByte(2); // data length = 2
-      builder.add([0xFF, 0xFE]);
+      builder.add([0x80, 0x10]); // ULEB128: data length = 2048
+      builder.add(Uint8List(2048));
       // symbol_size = 1024 = 0x0400
       builder.addByte(0x00);
       builder.addByte(0x04);
@@ -96,9 +93,40 @@ void main() {
       expect(() => parseSliverResponse(Uint8List(0)), throwsFormatException);
     });
 
+    test('rejects trailing data after the inner struct', () {
+      expect(
+        () => parseSliverResponse(Uint8List.fromList([2, 1, 2, 2, 0, 7, 0, 0])),
+        throwsFormatException,
+      );
+    });
+
+    test('rejects noncanonical and overflowing vector lengths', () {
+      for (final bytes in [
+        [0x80, 0, 1, 0, 0, 0],
+        [0x80, 0x80, 0x80, 0x80, 0x10],
+        [0x80, 0x80, 0x80, 0x80, 0x80, 0],
+      ]) {
+        expect(
+          () => parseSliverResponse(Uint8List.fromList(bytes)),
+          throwsFormatException,
+        );
+      }
+    });
+
+    test('rejects zero-size and incomplete symbols', () {
+      for (final bytes in [
+        [0, 0, 0, 0, 0],
+        [3, 1, 2, 3, 2, 0, 0, 0],
+      ]) {
+        expect(
+          () => parseSliverResponse(Uint8List.fromList(bytes)),
+          throwsFormatException,
+        );
+      }
+    });
+
     test('throws when data is truncated', () {
       final builder = BytesBuilder(copy: false);
-      builder.addByte(0); // variant
       builder.addByte(100); // claims 100 bytes of data
       builder.add([1, 2, 3]); // only 3 bytes
 
@@ -110,7 +138,6 @@ void main() {
 
     test('throws when symbol_size bytes missing', () {
       final builder = BytesBuilder(copy: false);
-      builder.addByte(0); // variant
       builder.addByte(1); // data length = 1
       builder.addByte(42); // data
       // Missing symbol_size and index
@@ -123,7 +150,6 @@ void main() {
 
     test('throws when index bytes missing', () {
       final builder = BytesBuilder(copy: false);
-      builder.addByte(0); // variant
       builder.addByte(1); // data length = 1
       builder.addByte(42); // data
       builder.addByte(4); // symbol_size (only 1 byte of u16)
@@ -168,16 +194,16 @@ void main() {
       expect(decoded.index, original.index);
     });
 
-    test('variant byte is 0 for Primary', () {
-      final sliver = SliverData(data: Uint8List(1), symbolSize: 1, index: 0);
+    test('Primary upload contains only SliverData BCS', () {
+      final sliver = SliverData(data: Uint8List(2), symbolSize: 2, index: 7);
       final encoded = encodeSliverForUpload(sliver, SliverType.primary);
-      expect(encoded[0], 0);
+      expect(encoded, [2, 0, 0, 2, 0, 7, 0]);
     });
 
-    test('variant byte is 1 for Secondary', () {
-      final sliver = SliverData(data: Uint8List(1), symbolSize: 1, index: 0);
+    test('Secondary upload contains only SliverData BCS', () {
+      final sliver = SliverData(data: Uint8List(2), symbolSize: 2, index: 7);
       final encoded = encodeSliverForUpload(sliver, SliverType.secondary);
-      expect(encoded[0], 1);
+      expect(encoded, [2, 0, 0, 2, 0, 7, 0]);
     });
 
     test('round-trips large data (> 127 bytes, multi-byte ULEB128)', () {
@@ -193,13 +219,13 @@ void main() {
     });
 
     test('handles empty data', () {
-      final original = SliverData(data: Uint8List(0), symbolSize: 0, index: 0);
+      final original = SliverData(data: Uint8List(0), symbolSize: 1, index: 0);
 
       final encoded = encodeSliverForUpload(original, SliverType.primary);
       final decoded = parseSliverResponse(encoded);
 
       expect(decoded.data.length, 0);
-      expect(decoded.symbolSize, 0);
+      expect(decoded.symbolSize, 1);
       expect(decoded.index, 0);
     });
   });

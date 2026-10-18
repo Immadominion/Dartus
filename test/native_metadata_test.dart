@@ -9,6 +9,34 @@ import 'package:dartus/direct.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('storage-node sliver bodies reconstruct the original blob', () {
+    final encoder = WalrusBlobEncoder();
+    final data = Uint8List.fromList(List.generate(300, (i) => i % 256));
+    final encoded = encoder.encodeBlob(data, 10);
+    // The official GET route serializes the same inner SliverData accepted by
+    // PUT. Recover from a nonsequential subset, including parity slivers.
+    final slivers = [
+      for (final index in [9, 2, 5, 0])
+        parseSliverResponse(
+          WalrusBlobEncoder.bcsSliverData(encoded.primarySlivers[index]),
+        ),
+    ];
+    expect(slivers.map((sliver) => sliver.index), [9, 2, 5, 0]);
+    expect(
+      encoder.decodeBlob(
+        primarySlivers: slivers,
+        numShards: 10,
+        unencodedLength: data.length,
+      ),
+      data,
+    );
+    final secondary = parseSliverResponse(
+      WalrusBlobEncoder.bcsSliverData(encoded.secondarySlivers[2]),
+    );
+    expect(secondary.index, 7);
+    expect(secondary.data, encoded.secondarySlivers[2].data);
+  });
+
   test('FFI rejects dimensions that would truncate at the native boundary', () {
     final ffi = WalrusFfiBindings.instance();
     for (final shards in [-1, 0, 65536, 65537]) {

@@ -41,27 +41,19 @@ class ParsedBlobMetadata {
 // Sliver Response Parsing
 // ---------------------------------------------------------------------------
 
-/// Parse a BCS-encoded `Sliver` response from a storage node GET endpoint.
+/// Parse a BCS-encoded `SliverData` response from a storage node GET endpoint.
 ///
-/// The BCS layout of `Sliver` is an enum:
+/// The endpoint returns the inner struct; the URL selects the sliver axis.
 /// ```
-/// variant: u8 (0 = Primary, 1 = Secondary)
-/// SliverData:
-///   symbols:
-///     data: ULEB128(length) || raw bytes
-///     symbol_size: u16 LE
-///   index: u16 LE
+/// symbols:
+///   data: ULEB128(length) || raw bytes
+///   symbol_size: u16 LE
+/// index: u16 LE
 /// ```
 ///
 /// Returns a [SliverData] with the parsed fields.
 SliverData parseSliverResponse(Uint8List bcsBytes) {
   var offset = 0;
-
-  // Variant byte (0 = Primary, 1 = Secondary) — skip.
-  if (offset >= bcsBytes.length) {
-    throw FormatException('Sliver BCS too short: missing variant byte');
-  }
-  offset += 1;
 
   // Symbols.data: byteVector = ULEB128(length) + raw bytes
   final (dataLength, uleb128Size) = _readUleb128(bcsBytes, offset);
@@ -82,13 +74,21 @@ SliverData parseSliverResponse(Uint8List bcsBytes) {
   }
   final symbolSize = bcsBytes[offset] | (bcsBytes[offset + 1] << 8);
   offset += 2;
+  if (symbolSize == 0 || dataLength % symbolSize != 0) {
+    throw FormatException(
+      'SliverData must contain complete nonzero-size symbols',
+    );
+  }
 
   // index: u16 LE
   if (offset + 2 > bcsBytes.length) {
     throw FormatException('Sliver BCS too short: missing index');
   }
   final index = bcsBytes[offset] | (bcsBytes[offset + 1] << 8);
-  // offset += 2; // end
+  offset += 2;
+  if (offset != bcsBytes.length) {
+    throw FormatException('Unexpected trailing bytes in SliverData BCS');
+  }
 
   return SliverData(data: data, symbolSize: symbolSize, index: index);
 }
@@ -142,16 +142,12 @@ ParsedBlobMetadata parseBlobMetadataResponse(Uint8List bcsBytes) {
   );
 }
 
-/// BCS-encode a [SliverData] as a `Sliver` enum for storage node PUT.
+/// BCS-encode a [SliverData] for storage node PUT.
 ///
-/// Wraps the sliver in the BCS `Sliver` enum with the specified variant.
-/// This is different from `WalrusBlobEncoder.bcsSliverData()` which
-/// encodes only the inner `SliverData` struct.
+/// Both axes use the same body layout; [type] is retained for API compatibility.
+/// Matches `WalrusBlobEncoder.bcsSliverData()`.
 Uint8List encodeSliverForUpload(SliverData sliver, SliverType type) {
   final builder = BytesBuilder(copy: false);
-
-  // Sliver enum variant
-  builder.addByte(type == SliverType.primary ? 0 : 1);
 
   // Symbols.data: byteVector
   _writeUleb128(builder, sliver.data.length);
@@ -187,9 +183,17 @@ Uint8List encodeSliverForUpload(SliverData sliver, SliverType type) {
       );
     }
     final byte = data[offset + bytesRead];
+    if (bytesRead == 4 && byte > 0x0f) {
+      throw FormatException('BCS vector length exceeds u32');
+    }
     result |= (byte & 0x7F) << shift;
     bytesRead++;
-    if ((byte & 0x80) == 0) break;
+    if ((byte & 0x80) == 0) {
+      if (bytesRead > 1 && byte == 0) {
+        throw FormatException('Noncanonical ULEB128 length');
+      }
+      break;
+    }
     shift += 7;
   }
 
