@@ -5,6 +5,19 @@ All notable changes to Dartus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-10-18
+
+### Added
+
+- Persist and restore blob and quilt upload checkpoints, including content
+  validation, relay nonces, certificates, and transaction receipts.
+- Recoverable wallet signers with stable request IDs for resuming interrupted
+  transaction submissions.
+
+### Fixed
+
+- Block replacement transactions while an externally signed request is unresolved.
+
 ## [0.4.0] - 2026-10-18
 
 ### Added

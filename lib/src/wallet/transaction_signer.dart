@@ -87,6 +87,52 @@ abstract interface class WalrusTransactionSigner {
   Future<String> signAndExecute(WalletTransaction transaction);
 }
 
+/// A signer that durably records signed bytes before submitting them.
+///
+/// A repeated [requestId] must resolve the original request or submit its
+/// exact saved bytes. It must never build and pay for a replacement transaction.
+/// If signing alone was interrupted before submission, it may ask to sign again.
+abstract interface class RecoverableWalrusTransactionSigner
+    implements WalrusTransactionSigner {
+  Future<String> signAndExecuteRecoverable(
+    WalletTransaction transaction, {
+    required String requestId,
+    required bool resume,
+  });
+}
+
+/// Callback adapter for a wallet with a durable transaction journal.
+class RecoverableWalletTransactionSigner extends WalletTransactionSigner
+    implements RecoverableWalrusTransactionSigner {
+  RecoverableWalletTransactionSigner({
+    required super.address,
+    required Future<String> Function(
+      WalletTransaction transaction, {
+      required String requestId,
+      required bool resume,
+    })
+    execute,
+    super.isDefinitelyNotCommitted,
+  }) : _recoverableExecute = execute,
+       super(
+         execute: (_) => throw StateError('A durable request ID is required'),
+       );
+
+  final Future<String> Function(
+    WalletTransaction transaction, {
+    required String requestId,
+    required bool resume,
+  })
+  _recoverableExecute;
+
+  @override
+  Future<String> signAndExecuteRecoverable(
+    WalletTransaction transaction, {
+    required String requestId,
+    required bool resume,
+  }) => _recoverableExecute(transaction, requestId: requestId, resume: resume);
+}
+
 /// A [WalrusTransactionSigner] that hands transactions to a wallet through a
 /// callback, typically one that calls `sui:signAndExecuteTransaction`.
 class WalletTransactionSigner implements WalrusTransactionSigner {

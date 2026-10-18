@@ -1,8 +1,11 @@
 /// Store blobs on Walrus paid for by the person's own wallet.
 library;
 
+import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 import 'package:sui/sui.dart';
@@ -18,6 +21,8 @@ import '../utils/quilts.dart';
 import '../utils/upload_policy.dart';
 import 'transaction_signer.dart';
 import 'walrus_chain_reader.dart';
+
+part 'walrus_write_checkpoint.dart';
 
 /// Writes blobs to Walrus through an upload relay, with every cost paid by
 /// the signer: WAL for storage, SUI for gas and the relay's tip.
@@ -130,13 +135,27 @@ class WalrusWriter {
     required int epochs,
     bool deletable = true,
     String? recipient,
+    Future<void> Function(WalrusWriteCheckpoint checkpoint)? onCheckpoint,
   }) => WalrusWriteFlow._(
     this,
     data,
     epochs: epochs,
     deletable: deletable,
     recipient: recipient,
+    onCheckpoint: onCheckpoint,
   );
+
+  /// Restore an interrupted blob write after checking its saved content.
+  Future<WalrusWriteFlow> restoreFlow(
+    WalrusWriteCheckpoint checkpoint, {
+    Future<void> Function(WalrusWriteCheckpoint checkpoint)? onCheckpoint,
+  }) => _restoreBlobFlow(this, checkpoint, onCheckpoint);
+
+  /// Restore a quilt with its original layout, files and relay nonce.
+  Future<WalrusWriteFilesFlow> restoreFilesFlow(
+    WalrusWriteCheckpoint checkpoint, {
+    Future<void> Function(WalrusWriteCheckpoint checkpoint)? onCheckpoint,
+  }) => _restoreFilesFlow(this, checkpoint, onCheckpoint);
 
   /// Store [data] for [epochs] epochs, paid by [signer].
   ///
@@ -164,12 +183,14 @@ class WalrusWriter {
     required int epochs,
     bool deletable = true,
     String? recipient,
+    Future<void> Function(WalrusWriteCheckpoint checkpoint)? onCheckpoint,
   }) => WalrusWriteFilesFlow._(
     this,
     files,
     epochs: epochs,
     deletable: deletable,
     recipient: recipient,
+    onCheckpoint: onCheckpoint,
   );
 
   /// Store several [files] together as one Walrus quilt: one blob, so one
@@ -263,6 +284,7 @@ class WalrusWriteFlow {
     required this.epochs,
     required this.deletable,
     String? recipient,
+    this.onCheckpoint,
   }) : data = Uint8List.fromList(data).asUnmodifiableView(),
        recipient = recipient == null
            ? null
@@ -279,6 +301,10 @@ class WalrusWriteFlow {
   /// Who receives the blob once it is certified; the signer when null.
   final String? recipient;
 
+  /// Must complete only after the snapshot is durably saved. Failure stops
+  /// the flow before its next wallet request or relay upload.
+  final Future<void> Function(WalrusWriteCheckpoint checkpoint)? onCheckpoint;
+
   BlobMetadata? _metadata;
   int? _metadataShards;
   String? _owner;
@@ -290,6 +316,16 @@ class WalrusWriteFlow {
   bool _busy = false;
   WalrusTransactionOutcomeUnknown? _unknownOutcome;
   bool _unknownIsRegistration = true;
+  WalletTransaction? _pendingTransaction;
+  String? _pendingRequestId;
+  late final String _dataHash = sha256.convert(data).toString();
+
+  /// Current immutable recovery state. Use [onCheckpoint] for save barriers.
+  WalrusWriteCheckpoint get checkpoint => _blobCheckpoint(this);
+
+  Future<void> _saveCheckpoint() async {
+    await onCheckpoint?.call(checkpoint);
+  }
 
   /// A submission whose outcome must be checked before this flow can retry.
   WalrusTransactionOutcomeUnknown? get unknownOutcome => _unknownOutcome;
@@ -303,6 +339,8 @@ class WalrusWriteFlow {
       throw StateError('There is no unknown submission to resolve');
     }
     _unknownOutcome = null;
+    _pendingTransaction = null;
+    _pendingRequestId = null;
   }
 
   Future<T> _exclusive<T>(Future<T> Function() operation) async {
@@ -343,14 +381,31 @@ class WalrusWriteFlow {
     WalrusTransactionSigner signer, {
     void Function(WalrusWriteStage stage)? onStage,
   }) async {
-    if (_result != null) return _result!;
     final owner = _walletAddress(signer.address, 'signer.address');
-    if (_unknownOutcome != null) throw _unknownOutcome!;
-    if (registerDigest != null && _owner != owner) {
+    if ((registerDigest != null || _pendingTransaction != null) &&
+        _owner != owner) {
       throw StateError(
         'This write was registered by $_owner; continue it with that account',
       );
     }
+    await _saveCheckpoint();
+    if (_result != null) return _result!;
+    final pending = _pendingTransaction;
+    if (pending != null) {
+      if (signer is! RecoverableWalrusTransactionSigner) {
+        throw _unknownOutcome ??= WalrusTransactionOutcomeUnknown(
+          pending,
+          StateError('The previous wallet request needs reconciliation'),
+        );
+      }
+      await _submit(
+        signer,
+        pending,
+        registration: _unknownIsRegistration,
+        resume: true,
+      );
+    }
+    if (_unknownOutcome != null) throw _unknownOutcome!;
 
     if (registerDigest == null) {
       onStage?.call(WalrusWriteStage.encoding);
@@ -381,18 +436,30 @@ class WalrusWriteFlow {
     WalrusTransactionSigner signer,
     WalletTransaction transaction, {
     required bool registration,
+    bool resume = false,
   }) async {
+    if (!resume) {
+      await _prepareRequest(transaction, registration: registration);
+    }
+    late final String digest;
     try {
-      final digest = await signer.signAndExecute(transaction);
+      digest = signer is RecoverableWalrusTransactionSigner
+          ? await signer.signAndExecuteRecoverable(
+              transaction,
+              requestId: _pendingRequestId!,
+              resume: resume,
+            )
+          : await signer.signAndExecute(transaction);
       if (digest.trim().isEmpty) {
         throw StateError('The wallet returned no transaction digest');
       }
-      return digest;
     } on WalrusTransactionNotCommitted {
+      _clearPending();
+      await _saveCheckpoint();
       rethrow;
     } catch (error) {
       var definitelyNotCommitted = false;
-      if (signer is WalletTransactionSigner) {
+      if (!resume && signer is WalletTransactionSigner) {
         try {
           definitelyNotCommitted =
               signer.isDefinitelyNotCommitted?.call(error) == true;
@@ -400,12 +467,48 @@ class WalrusWriteFlow {
           // A broken classifier does not establish a safe retry.
         }
       }
-      if (definitelyNotCommitted) rethrow;
+      if (definitelyNotCommitted) {
+        _clearPending();
+        await _saveCheckpoint();
+        rethrow;
+      }
       _unknownIsRegistration = registration;
       throw _unknownOutcome = WalrusTransactionOutcomeUnknown(
         transaction,
         error,
       );
+    }
+    if (registration) {
+      _registerDigest = digest;
+    } else {
+      _certifyDigest = digest;
+    }
+    _clearPending();
+    // Retain the receipt in memory even if saving it fails. The preceding
+    // persisted request can also recover it from a durable signer on reload.
+    await _saveCheckpoint();
+    return digest;
+  }
+
+  void _clearPending() {
+    _pendingTransaction = null;
+    _pendingRequestId = null;
+    _unknownOutcome = null;
+  }
+
+  Future<void> _prepareRequest(
+    WalletTransaction transaction, {
+    required bool registration,
+  }) async {
+    _pendingTransaction = transaction;
+    _pendingRequestId = _newRequestId();
+    _unknownIsRegistration = registration;
+    try {
+      await _saveCheckpoint();
+    } catch (_) {
+      // The signer has not been called. A persisted intent alone cannot pay.
+      _clearPending();
+      rethrow;
     }
   }
 
@@ -423,6 +526,7 @@ class WalrusWriteFlow {
     if (_metadata == null || _metadataShards != snapshot.nShards) {
       _metadata = await _writer.encoder.computeMetadata(data, snapshot.nShards);
       _metadataShards = snapshot.nShards;
+      await _saveCheckpoint();
     }
     return _metadata!;
   }
@@ -430,7 +534,15 @@ class WalrusWriteFlow {
   /// The transaction that pays for and registers the blob, for [owner] to
   /// sign. Throws [InsufficientWalBalanceError] when [owner] lacks the WAL.
   Future<WalletTransaction> registerTransaction(String owner) =>
-      _exclusive(() => _registerTransaction(owner));
+      _exclusive(() async {
+        final transaction = await _registerTransaction(owner);
+        await _prepareRequest(transaction, registration: true);
+        _unknownOutcome = WalrusTransactionOutcomeUnknown(
+          transaction,
+          StateError('Transaction handed to an external signer'),
+        );
+        return transaction;
+      });
 
   Future<WalletTransaction> _registerTransaction(String owner) async {
     owner = _walletAddress(owner, 'owner');
@@ -507,7 +619,11 @@ class WalrusWriteFlow {
     if (registerDigest != null && registerDigest != digest) {
       throw StateError('This flow already has a registration digest');
     }
-    _registerDigest = digest;
+    final resolvingPending = _pendingTransaction != null;
+    if (!resolvingPending) {
+      _registerDigest = digest;
+      await _saveCheckpoint();
+    }
     final snapshot = await _writer.chain.system();
     final List<String> created;
     try {
@@ -516,8 +632,13 @@ class WalrusWriteFlow {
         type: snapshot.blobType,
       );
     } on WalrusTransactionExecutionFailed {
-      _registerDigest = null;
-      _unknownOutcome = null;
+      // An arbitrary failed digest supplied by a caller is not evidence that
+      // the original pending request failed. Its intent must remain recoverable.
+      if (!resolvingPending) {
+        _registerDigest = null;
+        _clearPending();
+        await _saveCheckpoint();
+      }
       rethrow;
     }
     if (created.length != 1) {
@@ -527,8 +648,10 @@ class WalrusWriteFlow {
     }
     final blob = await _writer.chain.blobObject(created.single);
     _validateBlob(blob, expectedOwner: _owner!, objectId: created.single);
+    _registerDigest = digest;
     _blobObjectId = created.single;
-    _unknownOutcome = null;
+    _clearPending();
+    await _saveCheckpoint();
   }
 
   /// Send the bytes to the upload relay and keep its certificate.
@@ -540,6 +663,7 @@ class WalrusWriteFlow {
     if (metadata == null || registerDigest == null || blobObjectId == null) {
       throw StateError('Register the blob before uploading it');
     }
+    await _saveCheckpoint();
     final result = await _writer.relay.writeBlob(
       blobId: metadata.blobId,
       blob: data,
@@ -551,15 +675,26 @@ class WalrusWriteFlow {
       encodingType: 'RS2',
     );
     _certificate = result.certificate;
+    await _saveCheckpoint();
   }
 
   /// The transaction that certifies the uploaded blob (and hands it to
   /// [recipient]), for the same account that registered it.
-  Future<WalletTransaction> certifyTransaction() =>
-      _exclusive(_certifyTransaction);
+  Future<WalletTransaction> certifyTransaction() => _exclusive(() async {
+    final transaction = await _certifyTransaction();
+    await _prepareRequest(transaction, registration: false);
+    _unknownOutcome = WalrusTransactionOutcomeUnknown(
+      transaction,
+      StateError('Transaction handed to an external signer'),
+    );
+    return transaction;
+  });
 
   Future<WalletTransaction> _certifyTransaction() async {
     if (_unknownOutcome != null) throw _unknownOutcome!;
+    if (certifyDigest != null) {
+      throw StateError('The blob already has a certification receipt');
+    }
     final certificate = _certificate;
     if (certificate == null || _owner == null) {
       throw StateError('Upload the blob before certifying it');
@@ -602,12 +737,19 @@ class WalrusWriteFlow {
     if (certifyDigest != null && certifyDigest != digest) {
       throw StateError('This flow already has a certification digest');
     }
-    _certifyDigest = digest;
+    final resolvingPending = _pendingTransaction != null;
+    if (!resolvingPending) {
+      _certifyDigest = digest;
+      await _saveCheckpoint();
+    }
     try {
       await _writer.chain.waitForSuccess(digest);
     } on WalrusTransactionExecutionFailed {
-      _certifyDigest = null;
-      _unknownOutcome = null;
+      if (!resolvingPending) {
+        _certifyDigest = null;
+        _clearPending();
+        await _saveCheckpoint();
+      }
       rethrow;
     }
     final blob = await _writer.chain.blobObject(blobObjectId!);
@@ -619,14 +761,17 @@ class WalrusWriteFlow {
     if (!blob.isCertified) {
       throw WalrusClientError('Blob ${blob.blobId} is not certified yet');
     }
-    _unknownOutcome = null;
-    return _result = WalrusWriteResult(
+    _certifyDigest = digest;
+    _clearPending();
+    _result = WalrusWriteResult(
       blob: blob,
       registerDigest: registerDigest!,
       certifyDigest: digest,
       cost: _cost,
       relayTip: _tip,
     );
+    await _saveCheckpoint();
+    return _result!;
   }
 
   void _validateBlob(
@@ -659,6 +804,7 @@ class WalrusWriteFilesFlow {
     required this.epochs,
     required this.deletable,
     String? recipient,
+    this.onCheckpoint,
   }) : files = List.unmodifiable([
          for (final file in files)
            QuiltBlob(
@@ -683,14 +829,33 @@ class WalrusWriteFilesFlow {
   final int epochs;
   final bool deletable;
   final String? recipient;
+  final Future<void> Function(WalrusWriteCheckpoint checkpoint)? onCheckpoint;
 
   WalrusWriteFlow? _flow;
   QuiltIndex? _index;
+  List<Map<String, dynamic>>? _fileRecords;
   int? _shards;
   bool _busy = false;
 
   /// The flow writing the quilt blob, once the quilt is laid out.
   WalrusWriteFlow? get blobFlow => _flow;
+
+  /// Current recovery state, including files before the quilt is laid out.
+  WalrusWriteCheckpoint get checkpoint => _filesCheckpoint(
+    this,
+    (_flow ??
+            _writer.writeFlow(
+              Uint8List(0),
+              epochs: epochs,
+              deletable: deletable,
+              recipient: recipient,
+            ))
+        .checkpoint,
+  );
+
+  Future<void> _saveBlobCheckpoint(WalrusWriteCheckpoint blob) async {
+    await onCheckpoint?.call(_filesCheckpoint(this, blob));
+  }
 
   /// Perform the remaining steps with [signer], reporting each stage.
   Future<WalrusWriteFilesResult> run(
@@ -742,6 +907,7 @@ class WalrusWriteFilesFlow {
       epochs: epochs,
       deletable: deletable,
       recipient: recipient,
+      onCheckpoint: _saveBlobCheckpoint,
     );
   }
 }
